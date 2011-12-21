@@ -60,6 +60,7 @@ class DartUtils {
   static int64_t GetIntegerValue(Dart_Handle value_obj);
   static const char* GetStringValue(Dart_Handle str_obj);
   static bool GetBooleanValue(Dart_Handle bool_obj);
+  static Dart_Port GetPortValue(Dart_Handle port_obj);
   static void SetIntegerInstanceField(Dart_Handle handle,
                                       const char* name,
                                       intptr_t val);

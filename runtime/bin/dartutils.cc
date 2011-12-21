@@ -59,6 +59,14 @@ bool DartUtils::GetBooleanValue(Dart_Handle bool_obj) {
 }
 
 
+Dart_Port DartUtils::GetPortValue(Dart_Handle port_obj) {
+  if (Dart_IsNull(port_obj)) {
+    return 0;
+  }
+  return DartUtils::GetIntegerInstanceField(port_obj, DartUtils::kIdFieldName);
+}
+
+
 void DartUtils::SetIntegerInstanceField(Dart_Handle handle,
                                         const char* name,
                                         intptr_t val) {
