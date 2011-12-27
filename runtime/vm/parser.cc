@@ -3519,8 +3519,8 @@ void Parser::ParseNativeFunctionBlock(const ParamList* params,
                                                               native_name,
                                                               num_parameters);
   if (native_function == NULL) {
-    ErrorMsg(native_pos, "native function '%s' cannot be found",
-        native_name.ToCString());
+    ErrorMsg(native_pos, "native function '%s' with %i params cannot be found",
+        native_name.ToCString(), num_parameters);
   }
 
   const bool has_opt_params = (params->num_optional_parameters > 0);
