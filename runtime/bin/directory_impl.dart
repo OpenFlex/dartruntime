@@ -170,6 +170,34 @@ class _Directory implements Directory {
   static bool _create(String path) native "Directory_Create";
   static bool _delete(String path) native "Directory_Delete";
 
+  Directory subdirectory(List<String> names) {
+    String sep = new Platform().pathSeparator();
+
+    StringBuffer result = new StringBuffer();
+    if (!_path.endsWith(sep)) {
+      result.add(_path);
+    } else {
+      String path = _path.substring(0, _path.length - 1);
+      result.add(path);
+    }
+
+    for (String name in names) {
+      result.add(sep).add(name);
+    }
+    return new Directory("$result");
+  }
+
+  File file(String name) {
+    String sep = new Platform().pathSeparator();
+
+    StringBuffer result = new StringBuffer(_path);
+    if (!_path.endsWith(sep)) {
+      result.add(sep);
+    }
+    result.add(name);
+    return new File("$result");
+  }
+
   void exists() {
     var handler = (_existsHandler != null) ? _existsHandler : (result) => null;
     var operation = new _DirExistsOperation(_path);

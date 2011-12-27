@@ -16,6 +16,18 @@ interface Directory factory _Directory {
   Directory.home();
 
   /**
+   * Creates a directory object representing a direct or indirect subdirectory
+   * of this directory. Each element of the [:names:] list corresponds to one
+   * level of a filesystem tree.
+   */
+  Directory subdirectory(List<String> names);
+
+  /**
+   * Creates a [File] object representing a file [:name:] in [:this:] Directory.
+   */
+  File file(String name);
+
+  /**
    * Check whether a directory with this name already exists. If the
    * operation completes successfully the [existsHandler] is called with
    * the result. Otherwise the [errorHandler] is called.
