@@ -128,3 +128,9 @@ void FUNCTION_NAME(Directory_Delete)(Dart_NativeArguments args) {
   }
   Dart_ExitScope();
 }
+
+void FUNCTION_NAME(Directory_CurrentUserHome)(Dart_NativeArguments args) {
+  Dart_EnterScope();
+  Dart_SetReturnValue(args, Dart_NewString(Directory::CurrentUserHome()));
+  Dart_ExitScope();
+}

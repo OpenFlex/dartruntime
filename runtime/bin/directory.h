@@ -34,6 +34,8 @@ class Directory {
 
   static bool Delete(const char* path);
 
+  static const char* CurrentUserHome();
+
   DISALLOW_ALLOCATION();
   DISALLOW_IMPLICIT_CONSTRUCTORS(Directory);
 };

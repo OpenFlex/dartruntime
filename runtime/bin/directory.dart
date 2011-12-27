@@ -11,6 +11,11 @@ interface Directory factory _Directory {
   Directory(String path);
 
   /**
+   * Creates a directory object representing the current user's home directory.
+   */
+  Directory.home();
+
+  /**
    * Check whether a directory with this name already exists. If the
    * operation completes successfully the [existsHandler] is called with
    * the result. Otherwise the [errorHandler] is called.

@@ -157,9 +157,12 @@ class _DirectoryOperationScheduler {
 
 
 class _Directory implements Directory {
+  static String _currentUserHomeDir() native "Directory_CurrentUserHome";
 
   _Directory(String this._path)
       : _scheduler = new _DirectoryOperationScheduler();
+
+  _Directory.home() : this(_currentUserHomeDir());
 
   static String _createTemp(String template,
                             _OSStatus status) native "Directory_CreateTemp";

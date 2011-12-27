@@ -330,3 +330,19 @@ int Directory::CreateTemp(const char* const_template,
 bool Directory::Delete(const char* dir_name) {
   return (RemoveDirectory(dir_name) != 0);
 }
+
+const char* Directory::CurrentUserHome() {
+  // TODO use GetEnvironmentVariable instead of getenv
+  char* home = getenv("HOME");
+  if (home == NULL) {
+    home = getenv("USERPROFILE");
+  }
+  if (home == NULL) {
+    char* homedrive = getenv("HOMEDRIVE");
+    char* homepath  = getenv("HOMEPATH");
+    home = (char*) malloc(strlen(homedrive) + strlen(homepath) + 1);
+    strcpy(home, homedrive);
+    strcat(home, homepath);
+ }
+  return home;
+}

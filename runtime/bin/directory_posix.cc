@@ -9,6 +9,7 @@
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <pwd.h>
 
 #include "bin/file.h"
 #include "bin/platform.h"
@@ -300,4 +301,12 @@ int Directory::CreateTemp(const char* const_template,
 
 bool Directory::Delete(const char* dir_name) {
   return (rmdir(dir_name) == 0);
+}
+
+const char* Directory::CurrentUserHome() {
+  char* home = getenv("HOME");
+  if (home == NULL) {
+    home = getpwuid(getuid())->pw_dir;
+  }
+  return home;
 }
