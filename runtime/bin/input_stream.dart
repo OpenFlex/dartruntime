@@ -110,12 +110,26 @@ interface StringInputStream factory _StringInputStream {
   String read();
 
   /**
+   * Synchronously reads as many characters as is available from the stream.
+   * If no data is available null will be returned.
+   */
+  String readSync();
+
+  /**
    * Reads the next line from the stream. The line ending characters
    * will not be part og the returned string. If a full line is not
    * available null will be returned. The line break character(s) are
    * discarded.
    */
   String readLine();
+
+  /**
+   * Synchronously reads the next line from the stream. The line ending
+   * characters will not be part og the returned string. If a full line is not
+   * available null will be returned. The line break character(s) are
+   * discarded.
+   */
+  String readLineSync();
 
   /**
    * Returns whether the stream has been closed. There might still be

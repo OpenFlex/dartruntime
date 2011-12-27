@@ -237,6 +237,11 @@ class _StringInputStream implements StringInputStream {
     return result;
   }
 
+  String readSync() {
+    _readData();
+    return read();
+  }
+
   String readLine() {
     String decodedLine = _decoder.decodedLine;
     if (decodedLine == null) {
@@ -251,6 +256,11 @@ class _StringInputStream implements StringInputStream {
     }
     _checkInstallDataHandler();
     return decodedLine;
+  }
+
+  String readLineSync() {
+    _readData();
+    return readLine();
   }
 
   String get encoding() => _encoding;
