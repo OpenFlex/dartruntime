@@ -99,6 +99,21 @@ interface Directory factory _Directory {
   void list([bool recursive]);
 
   /**
+   * Synchronously list the sub-directories and files of this
+   * [Directory]. Optionally recurse into sub-directories. For each
+   * file and directory, the file or directory handler is called.
+   * When the [:fullPaths:] argument is set to [:false:], only names
+   * of the files and directories found are passed to the handlers, full
+   * paths are used otherwise.
+   *
+   * When all directories have been listed the done handler is called. If
+   * the listing operation is recursive, the error handler is called
+   * if a subdirectory cannot be opened for listing. This method returns
+   * only after all the handlers were called.
+   */
+  void listSync([bool recursive, bool fullPaths]);
+
+  /**
    * Sets the directory handler that is called for all directories
    * during listing operations. The directory handler is called with
    * the full path of the directory.

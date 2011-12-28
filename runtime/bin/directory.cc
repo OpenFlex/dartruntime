@@ -39,6 +39,32 @@ void FUNCTION_NAME(Directory_List)(Dart_NativeArguments args) {
 }
 
 
+void FUNCTION_NAME(Directory_ListSync)(Dart_NativeArguments args) {
+  Dart_EnterScope();
+  Dart_Handle path = Dart_GetNativeArgument(args, 0);
+  Dart_Handle recursive = Dart_GetNativeArgument(args, 1);
+  Dart_Handle full_paths = Dart_GetNativeArgument(args, 2);
+  Dart_Handle dir_callback = Dart_GetNativeArgument(args, 3);
+  Dart_Handle file_callback = Dart_GetNativeArgument(args, 4);
+  Dart_Handle done_callback = Dart_GetNativeArgument(args, 5);
+  Dart_Handle error_callback = Dart_GetNativeArgument(args, 6);
+  if (!Dart_IsString(path) || !Dart_IsBoolean(recursive)
+      || !Dart_IsBoolean(full_paths)) {
+    Dart_SetReturnValue(args, Dart_NewBoolean(false));
+  } else {
+    Directory::ListSync(DartUtils::GetStringValue(path),
+                        DartUtils::GetBooleanValue(recursive),
+                        DartUtils::GetBooleanValue(full_paths),
+                        dir_callback,
+                        file_callback,
+                        done_callback,
+                        error_callback);
+    Dart_SetReturnValue(args, Dart_NewBoolean(true));
+  }
+  Dart_ExitScope();
+}
+
+
 void FUNCTION_NAME(Directory_Exists)(Dart_NativeArguments args) {
   static const int kError = -1;
   static const int kExists = 1;

@@ -213,6 +213,187 @@ static bool ListRecursively(const char* dir_name,
 }
 
 
+// Forward declaration.
+static bool ListRecursivelySync(const char* dir_name,
+                                bool recursive,
+                                bool full_paths,
+                                Dart_Handle dir_callback,
+                                Dart_Handle file_callback,
+                                Dart_Handle done_callback,
+                                Dart_Handle error_callback);
+
+
+static bool HandleDirSync(char* dir_name,
+                          char* path,
+                          int path_length,
+                          bool recursive,
+                          bool full_paths,
+                          Dart_Handle dir_callback,
+                          Dart_Handle file_callback,
+                          Dart_Handle done_callback,
+                          Dart_Handle error_callback) {
+  if (strcmp(dir_name, ".") != 0 &&
+      strcmp(dir_name, "..") != 0) {
+    size_t written = snprintf(path + path_length,
+                              PATH_MAX - path_length,
+                              "%s",
+                              dir_name);
+    ASSERT(written == strlen(dir_name));
+    if (Dart_IsClosure(dir_callback)) {
+      Dart_Handle arguments[1];
+      arguments[0] = Dart_NewString(full_paths ? path : dir_name);
+      Dart_InvokeClosure(dir_callback, 1, arguments);
+    }
+    if (recursive) {
+      return ListRecursivelySync(path,
+                                 recursive,
+                                 full_paths,
+                                 dir_callback,
+                                 file_callback,
+                                 done_callback,
+                                 error_callback);
+    }
+  }
+  return true;
+}
+
+
+static void HandleFileSync(char* file_name,
+                           char* path,
+                           int path_length,
+                           bool full_paths,
+                           Dart_Handle file_callback) {
+  if (Dart_IsClosure(file_callback)) {
+    size_t written = snprintf(path + path_length,
+                              PATH_MAX - path_length,
+                              "%s",
+                              file_name);
+    ASSERT(written == strlen(file_name));
+    Dart_Handle arguments[1];
+    arguments[0] = Dart_NewString(full_paths ? path : file_name);
+    Dart_InvokeClosure(file_callback, 1, arguments);
+  }
+}
+
+
+static void PostErrorSync(Dart_Handle error_callback,
+                          const char* prefix,
+                          const char* suffix,
+                          int error_code) {
+  if (Dart_IsClosure(error_callback)) {
+    char* error_str = Platform::StrError(error_code);
+    int error_message_size =
+        strlen(prefix) + strlen(suffix) + strlen(error_str) + 3;
+    char* message = static_cast<char*>(malloc(error_message_size + 1));
+    int written = snprintf(message,
+                           error_message_size + 1,
+                           "%s%s (%s)",
+                           prefix,
+                           suffix,
+                           error_str);
+    ASSERT(written == error_message_size);
+    free(error_str);
+    Dart_Handle arguments[1];
+    arguments[0] = Dart_NewString(message);
+    Dart_InvokeClosure(error_callback, 1, arguments);
+    free(message);
+  }
+}
+
+
+static bool ListRecursivelySync(const char* dir_name,
+                                bool recursive,
+                                bool full_paths,
+                                Dart_Handle dir_callback,
+                                Dart_Handle file_callback,
+                                Dart_Handle done_callback,
+                                Dart_Handle error_callback) {
+  DIR* dir_pointer = opendir(dir_name);
+  if (dir_pointer == NULL) {
+    PostErrorSync(error_callback, "Directory listing failed for: ", dir_name, errno);
+    return false;
+  }
+
+  // Compute full path for the directory currently being listed.
+  char *path = static_cast<char*>(malloc(PATH_MAX));
+  ASSERT(path != NULL);
+  int path_length = 0;
+  ComputeFullPath(dir_name, path, &path_length);
+
+  // Iterated the directory and post the directories and files to the
+  // callbacks.
+  int success = 0;
+  bool listing_error = false;
+  dirent entry;
+  dirent* result;
+  while ((success = readdir_r(dir_pointer, &entry, &result)) == 0 &&
+         result != NULL &&
+         !listing_error) {
+    switch (entry.d_type) {
+      case DT_DIR:
+        listing_error = listing_error || !HandleDirSync(entry.d_name,
+                                                    path,
+                                                    path_length,
+                                                    recursive,
+                                                    full_paths,
+                                                    dir_callback,
+                                                    file_callback,
+                                                    done_callback,
+                                                    error_callback);
+        break;
+      case DT_REG:
+        HandleFileSync(entry.d_name, path, path_length, full_paths, file_callback);
+        break;
+      case DT_UNKNOWN: {
+        // On some file systems the entry type is not determined by
+        // readdir_r. For those we use lstat to determine the entry
+        // type.
+        struct stat entry_info;
+        size_t written = snprintf(path + path_length,
+                                  PATH_MAX - path_length,
+                                  "%s",
+                                  entry.d_name);
+        ASSERT(written == strlen(entry.d_name));
+        int lstat_success = lstat(path, &entry_info);
+        if (lstat_success == -1) {
+          listing_error = true;
+          PostErrorSync(error_callback, "Directory listing failed for: ", path, errno);
+          break;
+        }
+        if ((entry_info.st_mode & S_IFMT) == S_IFDIR) {
+          listing_error = listing_error || !HandleDirSync(entry.d_name,
+                                                          path,
+                                                          path_length,
+                                                          recursive,
+                                                          full_paths,
+                                                          dir_callback,
+                                                          file_callback,
+                                                          done_callback,
+                                                          error_callback);
+        } else if ((entry_info.st_mode & S_IFMT) == S_IFREG) {
+          HandleFileSync(entry.d_name, path, path_length, full_paths, file_callback);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  if (success != 0) {
+    listing_error = true;
+    PostErrorSync(error_callback, "Directory listing failed", "", success);
+  }
+
+  if (closedir(dir_pointer) == -1) {
+    PostErrorSync(error_callback, "Failed to close directory", "", errno);
+  }
+  free(path);
+
+  return !listing_error;
+}
+
+
 void Directory::List(const char* dir_name,
                      bool recursive,
                      Dart_Port dir_port,
@@ -228,6 +409,28 @@ void Directory::List(const char* dir_name,
   if (done_port != 0) {
     Dart_Handle value = Dart_NewBoolean(completed);
     Dart_Post(done_port, value);
+  }
+}
+
+
+void Directory::ListSync(const char* dir_name,
+                         bool recursive,
+                         bool full_paths,
+                         Dart_Handle dir_callback,
+                         Dart_Handle file_callback,
+                         Dart_Handle done_callback,
+                         Dart_Handle error_callback) {
+  bool completed = ListRecursivelySync(dir_name,
+                                       recursive,
+                                       full_paths,
+                                       dir_callback,
+                                       file_callback,
+                                       done_callback,
+                                       error_callback);
+  if (Dart_IsClosure(done_callback)) {
+    Dart_Handle arguments[1];
+    arguments[0] = Dart_NewBoolean(completed);
+    Dart_InvokeClosure(done_callback, 1, arguments);
   }
 }
 

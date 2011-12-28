@@ -23,6 +23,14 @@ class Directory {
                    Dart_Port done_port,
                    Dart_Port error_port);
 
+  static void ListSync(const char* path,
+                       bool recursive,
+                       bool full_paths,
+                       Dart_Handle dir_callback,
+                       Dart_Handle file_callback,
+                       Dart_Handle done_callback,
+                       Dart_Handle error_callback);
+
   static ExistsResult Exists(const char* path);
 
   static bool Create(const char* path);

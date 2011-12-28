@@ -169,6 +169,13 @@ class _Directory implements Directory {
   static int _exists(String path) native "Directory_Exists";
   static bool _create(String path) native "Directory_Create";
   static bool _delete(String path) native "Directory_Delete";
+  static bool _listSync(String dir,
+                        bool recursive,
+                        bool fullPaths,
+                        void dirCallback(String dir),
+                        void fileCallback(String file),
+                        void doneCallback(bool done),
+                        void errorCallback(String error)) native "Directory_ListSync";
 
   Directory subdirectory(List<String> names) {
     String sep = new Platform().pathSeparator();
@@ -346,6 +353,11 @@ class _Directory implements Directory {
       // Send the listing parameters to the isolate.
       port.send(listingParameters, closePortsPort.toSendPort());
     });
+  }
+
+  void listSync([bool recursive = false, bool fullPaths = true]) {
+    _listSync(_path, recursive, fullPaths, _dirHandler, _fileHandler,
+        _doneHandler, _errorHandler);
   }
 
   void set dirHandler(void dirHandler(String dir)) {

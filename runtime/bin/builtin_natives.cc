@@ -16,6 +16,7 @@
 #define BUILTIN_NATIVE_LIST(V)                                                 \
   V(Directory_CurrentUserHome, 0)                                              \
   V(Directory_List, 7)                                                         \
+  V(Directory_ListSync, 7)                                                     \
   V(Directory_Exists, 1)                                                       \
   V(Directory_Create, 1)                                                       \
   V(Directory_CreateTemp, 2)                                                   \
