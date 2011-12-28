@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <curl/curl.h>
 
 #include "include/dart_api.h"
 #include "include/dart_debugger_api.h"
@@ -358,6 +359,8 @@ static void PrintUsage() {
 
 
 int main(int argc, char** argv) {
+  curl_global_init(CURL_GLOBAL_ALL);
+
   char* script_name;
   CommandLineOptions vm_options(argc);
   CommandLineOptions dart_options(argc);

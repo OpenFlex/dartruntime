@@ -14,6 +14,7 @@
 // List all native functions implemented in standalone dart that is used
 // to inject additional functionality e.g: Logger, file I/O, socket I/O etc.
 #define BUILTIN_NATIVE_LIST(V)                                                 \
+  V(Curl_Download, 7)                                                          \
   V(Directory_CurrentUserHome, 0)                                              \
   V(Directory_List, 7)                                                         \
   V(Directory_ListSync, 7)                                                     \

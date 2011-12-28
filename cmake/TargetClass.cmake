@@ -124,6 +124,10 @@ macro(t_makeExecutable)
     _addDefinitions()
     _addCompileFlags()
     _includeDirectories()
+
+    find_package(CURL REQUIRED)
+    include_directories(${CURL_INCLUDE_DIRS})
+    target_link_libraries(${t_name} ${CURL_LIBRARIES})
 endmacro()
 
 

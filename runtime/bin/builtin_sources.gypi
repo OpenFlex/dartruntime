@@ -12,6 +12,8 @@
     'builtin.dart',
     'buffer_list.dart',
     'chunked_stream.dart',
+    'curl.dart',
+    'curl_impl.dart',
     'directory.dart',
     'directory_impl.dart',
     'eventhandler.dart',
@@ -34,6 +36,7 @@
     #
     # C++ sources.
     #
+    'curl.cc',
     'dartutils.cc',
     'dartutils.h',
     'directory.cc',
