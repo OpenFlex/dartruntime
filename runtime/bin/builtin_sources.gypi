@@ -9,6 +9,8 @@
     #
     # Dart sources.
     #
+    'archive.dart',
+    'archive_impl.dart',
     'builtin.dart',
     'buffer_list.dart',
     'chunked_stream.dart',
@@ -36,6 +38,7 @@
     #
     # C++ sources.
     #
+    'archive.cc',
     'curl.cc',
     'dartutils.cc',
     'dartutils.h',

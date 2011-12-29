@@ -128,6 +128,10 @@ macro(t_makeExecutable)
     find_package(CURL REQUIRED)
     include_directories(${CURL_INCLUDE_DIRS})
     target_link_libraries(${t_name} ${CURL_LIBRARIES})
+
+    find_package(LibArchive REQUIRED)
+    include_directories(${LibArchive_INCLUDE_DIRS})
+    target_link_libraries(${t_name} ${LibArchive_LIBRARIES})
 endmacro()
 
 
