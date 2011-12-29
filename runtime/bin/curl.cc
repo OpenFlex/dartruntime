@@ -6,7 +6,6 @@
 #include <curl/curl.h>
 
 #include "bin/dartutils.h"
-#include "bin/directory.h"
 
 #include "include/dart_api.h"
 
