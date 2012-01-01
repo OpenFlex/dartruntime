@@ -10,7 +10,7 @@ interface CreateArchive default _CreateArchive {
 
   /**
    * Records a [file] to be added to the archive. Within the archive, it will
-   * be located at [path].
+   * be located at [path] (relative to the root of the archive).
    */
   void addFile(File file, String path);
 
@@ -41,5 +41,18 @@ interface ExtractArchive default _ExtractArchive {
    * successful. If the [directory] doesn't exist, it will be created.
    */
   bool extractTo(Directory directory);
+
+  /**
+   * Extract a single entry of this archive denoted by [path] to specified
+   * [directory] and returns whether it was successful. If no such entry
+   * exists within the archive, returns [false]. If the [directory]
+   * doesn't exist, it will be created.
+   */
+  bool extractEntry(String pathWithinArchive, Directory directory);
+
+  /**
+   * Returns whether this archive contains an entry with specified path.
+   */
+  bool findEntry(String pathWithinArchive);
 }
 

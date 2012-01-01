@@ -114,7 +114,7 @@ void FUNCTION_NAME(ArchiveCreate_Finish)(Dart_NativeArguments args) {
 
 // ---
 
-void FUNCTION_NAME(ArchiveExtract_Do)(Dart_NativeArguments args) {
+void FUNCTION_NAME(ArchiveExtract_ExtractAll)(Dart_NativeArguments args) {
   Dart_EnterScope();
 
   const char *archive_path = DartUtils::GetStringValue(Dart_GetNativeArgument(args, 0));
@@ -161,6 +161,105 @@ void FUNCTION_NAME(ArchiveExtract_Do)(Dart_NativeArguments args) {
   archive_read_finish(r);
   archive_write_close(w);
   archive_write_finish(w);
+
+  Dart_ExitScope();
+}
+
+void FUNCTION_NAME(ArchiveExtract_ExtractOne)(Dart_NativeArguments args) {
+  Dart_EnterScope();
+
+  const char *archive_path = DartUtils::GetStringValue(Dart_GetNativeArgument(args, 0));
+  const char *desired_entry_path = DartUtils::GetStringValue(Dart_GetNativeArgument(args, 1));
+  const char *out_directory_path = DartUtils::GetStringValue(Dart_GetNativeArgument(args, 2));
+
+  bool found = false;
+
+  struct archive *r = archive_read_new();
+  archive_read_support_compression_all(r);
+  archive_read_support_format_all(r);
+  archive_read_open_filename(r, archive_path, buffer_size);
+
+  int extract_flags = ARCHIVE_EXTRACT_SECURE_SYMLINKS | ARCHIVE_EXTRACT_SECURE_NODOTDOT;
+  struct archive *w = archive_write_disk_new();
+  archive_write_disk_set_options(w, extract_flags);
+
+  struct archive_entry *e;
+
+  while (archive_read_next_header(r, &e) == ARCHIVE_OK) {
+    const char *entry_path = archive_entry_pathname(e);
+    if (strcmp(entry_path, desired_entry_path) != 0) {
+      archive_read_data_skip(r);
+      continue;
+    }
+
+    found = true;
+
+    char *full_path = (char *) malloc((strlen(out_directory_path) + 1 + strlen(entry_path) + 1) * sizeof(char));
+    strcpy(full_path, out_directory_path);
+    strcat(full_path, "/");
+    strcat(full_path, entry_path);
+    archive_entry_set_pathname(e, full_path);
+
+    mode_t mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
+    archive_entry_set_mode(e, mode);
+
+    archive_write_header(w, e);
+
+    if (archive_entry_size(e) > 0) {
+      char buf[buffer_size];
+      size_t size;
+      while ((size = archive_read_data(r, &buf, buffer_size)) > 0) {
+        archive_write_data(w, &buf, size);
+      }
+    }
+
+    archive_write_finish_entry(w);
+
+    free(full_path);
+
+    break;
+  }
+
+  archive_read_close(r);
+  archive_read_finish(r);
+  archive_write_close(w);
+  archive_write_finish(w);
+
+  Dart_SetReturnValue(args, Dart_NewBoolean(found));
+
+  Dart_ExitScope();
+}
+
+void FUNCTION_NAME(ArchiveExtract_FindEntry)(Dart_NativeArguments args) {
+  Dart_EnterScope();
+
+  const char *archive_path = DartUtils::GetStringValue(Dart_GetNativeArgument(args, 0));
+  const char *desired_entry_path = DartUtils::GetStringValue(Dart_GetNativeArgument(args, 1));
+
+  bool found = false;
+
+  struct archive *r = archive_read_new();
+  archive_read_support_compression_all(r);
+  archive_read_support_format_all(r);
+  archive_read_open_filename(r, archive_path, buffer_size);
+
+  struct archive_entry *e;
+
+  while (archive_read_next_header(r, &e) == ARCHIVE_OK) {
+    const char *entry_path = archive_entry_pathname(e);
+    if (strcmp(entry_path, desired_entry_path) != 0) {
+      archive_read_data_skip(r);
+      continue;
+    }
+
+    found = true;
+    break;
+  }
+
+  archive_read_close(r);
+  archive_read_finish(r);
+
+  Dart_SetReturnValue(args, Dart_NewBoolean(found));
 
   Dart_ExitScope();
 }
