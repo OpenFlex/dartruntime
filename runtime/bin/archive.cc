@@ -80,6 +80,7 @@ void FUNCTION_NAME(ArchiveCreate_AddEntry)(Dart_NativeArguments args) {
   archive_entry_set_pathname(ae, entry_path);
   archive_entry_set_size(ae, file_stat.st_size);
   archive_entry_set_filetype(ae, AE_IFREG);
+  archive_entry_set_mode(ae, file_stat.st_mode);
   archive_write_header(a, ae);
 
   char buf[buffer_size];
@@ -139,9 +140,6 @@ void FUNCTION_NAME(ArchiveExtract_ExtractAll)(Dart_NativeArguments args) {
     strcat(full_path, entry_path);
     archive_entry_set_pathname(e, full_path);
 
-    mode_t mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
-    archive_entry_set_mode(e, mode);
-
     archive_write_header(w, e);
 
     if (archive_entry_size(e) > 0) {
@@ -199,9 +197,6 @@ void FUNCTION_NAME(ArchiveExtract_ExtractOne)(Dart_NativeArguments args) {
     strcat(full_path, "/");
     strcat(full_path, entry_path);
     archive_entry_set_pathname(e, full_path);
-
-    mode_t mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
-    archive_entry_set_mode(e, mode);
 
     archive_write_header(w, e);
 
