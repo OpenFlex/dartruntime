@@ -5,6 +5,10 @@
 #ifndef BIN_EVENTHANDLER_LINUX_H_
 #define BIN_EVENTHANDLER_LINUX_H_
 
+#if !defined(BIN_EVENTHANDLER_H_)
+#error Do not include eventhandler_linux.h directly; use eventhandler.h instead.
+#endif
+
 #include <unistd.h>
 #include <sys/socket.h>
 
@@ -100,7 +104,6 @@ class EventHandlerImplementation {
   void SetPort(intptr_t fd, Dart_Port dart_port, intptr_t mask);
   intptr_t GetPollEvents(struct pollfd* pollfd);
 
-  ThreadPool thread_pool;
   SocketData* socket_map_;
   intptr_t socket_map_size_;
   int64_t timeout_;  // Time for next timeout.

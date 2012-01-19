@@ -12,7 +12,18 @@ set(LIBRARY_OUTPUT_PATH     ${CMAKE_BINARY_DIR}/lib)
 
 option(tests "Enable tests" ON)
 option(bind  "Enable binding tests" ON)
-option(x64   "Generate code for 64-bit" OFF)
+option(arch  "Build for ia32, x64, or Arm" OFF)
+
+if(arch STREQUAL x64)
+    set(x64 1)
+elseif(arch STREQUAL arm)
+    include(Arm)
+else()
+    set(arch ia32)
+    set(ia32 1)
+endif()
+message(STATUS "Building for architecture ${arch}")
+
 
 project(dartruntime)
 
@@ -27,6 +38,16 @@ else()
     message(STATUS)
 endif()
 
+
+if(APPLE)
+    include(Apple)
+elseif(UNIX)
+    include(Linux)
+elseif(WIN32)
+    include(Windows)
+endif()
+
+
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE DEBUG)
 endif()
@@ -36,77 +57,12 @@ else()
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_DEBUG} -DNDEBUG")
 endif()
 
-if(UNIX AND NOT APPLE)
-    set(LINUX 1)
-endif()
-
-if(CMAKE_COMPILER_IS_GNUCXX)
-    execute_process(COMMAND ${CMAKE_CXX_COMPILER} -dumpversion OUTPUT_VARIABLE GCC_VERSION)
-    if(verbose)
-        message(STATUS "Using GCC version ${GCC_VERSION}")
-    endif()
-    set(warn  "-Wall -Wextra -Wno-unused-parameter -Wnon-virtual-dtor")
-    set(lang  "-ansi -fno-rtti -fno-exceptions")
-    set(link  "-fvisibility=hidden -fvisibility-inlines-hidden")
-    if(GCC_VERSION VERSION_LESS 4.6)
-        set(warn "${warn} -Werror")
-    endif()
-    if(NOT GCC_VERSION VERSION_LESS 4.3)
-        set(warn "${warn} -Wno-conversion-null -Wvla")
-    endif()
-    if(LINUX)
-        if(x64)
-            set(arch 64)
-        else()
-            set(arch 32)
-        endif()
-        set(librt -lrt)
-        set(multi "-m${arch} -MMD -fPIC ")
-    endif()
-    if(APPLE)
-        set(warn "${warn} -Wno-trigraphs -fmessage-length=0 -Wno-deprecated-declarations")
-        set(bin_sub_dir \${CONFIGURATION})
-        message(STATUS "Using SDK in '${CMAKE_OSX_SYSROOT}'")
-        set(multi "-arch i386 -isysroot ${CMAKE_OSX_SYSROOT}")
-    endif()
-    
-endif()
-
-
-if(MSVC)
-    if(NOT PYTHONINTERP_FOUND OR NOT openssl)
-        include(WindowsDependencies)
-    endif()
-    if(NOT openssl)
-        message(FATAL_ERROR "'openssl' not set, install 'Win32OpenSSL' and set openssl")
-    endif()
-    include_directories(${openssl}/include)
-    set(_ldir ${openssl}/lib/VC)
-    set(libopenssl debug ${_ldir}/libeay32MDd.lib optimized ${_ldir}/libeay32MD.lib)
-    if(MSVC_IDE)
-        set(bin_sub_dir "\$(Configuration)")
-    endif()
-    set(warn_level 1)
-    if(CMAKE_CXX_FLAGS MATCHES "/W[0-4]")
-        string(REGEX REPLACE "/W[0-4]" "/W${warn_level}" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-    endif()
-    if(CMAKE_CXX_FLAGS MATCHES "/EHsc")
-        string(REGEX REPLACE "/Esc" "/Esc-" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-    endif()
-    #set(warn_error   "/we4101")
-    set(warn_disable "/wd4018 /wd4099 /wd4100 /wd4127 /wd4146 /wd4189 /wd4200 /wd4244 /wd4245 /wd4291 /wd4389 /wd4512 /wd4611 /wd4701 /wd4702 /wd4731 /wd4706 /wd4800")
-    set(warn "${warn_disable} ${warn_error}")
-    set(lang  "/GR- /GS /Zc:wchar_t")
-    add_definitions(-D_CRT_SECURE_NO_DEPRECATE -D_CRT_NONSTDC_NO_DEPRECATE)
-    # disable checked iterators for msvc release builds to get maximum speed
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /D_SECURE_SCL=0")
-endif()
-
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${warn} ${multi} ${lang} ${link}")
 
 if(verbose)
     message(STATUS "Used compiler flags: ${CMAKE_CXX_FLAGS}")
 endif()
+
 
 t_setTopDir(${CMAKE_SOURCE_DIR}/../runtime)
 
@@ -124,14 +80,12 @@ t_addSources(vm/dart_api_impl.cc vm/debugger_api_impl.cc)
 t_includeDirectories(.)
 t_makeLibrary()
 
- 
+
 t_init(dart_builtin)
 t_findHeaders(bin .h)
 t_findSources(bin .cc)
 t_removeSources(ALL  main _test builtin_in builtin_nolib snapshot)
-t_removeSources(LINUX _win _macos)
-t_removeSources(APPLE _win _linux)
-t_removeSources(WIN32 _macos _linux _posix)
+t_removeForeignOsSources()
 t_findDartFiles(bin)
 t_prependDartFiles(bin/builtin.dart) # load first
 t_embedDartFiles(bin/builtin_in.cc ${gen_dir}/builtin.cc)
@@ -142,6 +96,9 @@ t_makeLibrary()
 t_init(dart_lib)
 t_findHeaders(lib .h)
 t_findSources(lib .cc)
+t_findSources(platform .h)
+t_findSources(platform .cc)
+t_removeForeignOsSources()
 t_includeDirectories(.)
 t_makeLibrary()
 
@@ -150,9 +107,7 @@ t_init(dart_vm)
 t_findHeaders(vm .h)
 t_findSources(vm .cc)
 t_removeSources(ALL  _test _in.cc _api_impl bootstrap.cc bootstrap_nocorelib.cc)
-t_removeSources(LINUX _win _macos)
-t_removeSources(APPLE _win _linux)
-t_removeSources(WIN32 _macos _linux _posix)
+t_removeForeignOsSources()
 t_includeDirectories(.)
 t_makeLibrary()
 
@@ -181,7 +136,7 @@ t_makeLibrary()
 #
 
 t_init(dart_plain)
-# TODO using bin/main.cc without corelib makes no sense 
+# TODO using bin/main.cc without corelib makes no sense
 t_addSources(bin/main.cc bin/builtin_nolib.cc bin/snapshot_empty.cc)
 t_addSources(vm/bootstrap_nocorelib.cc)
 t_includeDirectories(.)
@@ -191,7 +146,7 @@ t_makeExecutable()
 
 #
 # with corelib
-#    
+#
 
 t_init(dart_corelib)
 t_addSources(vm/bootstrap.cc)
@@ -205,7 +160,7 @@ t_findDartFiles(../corelib/src/implementation)
 t_embedDartFiles(vm/corelib_impl_in.cc ${gen_dir}/corelib_impl.cc)
 t_includeDirectories(.)
 t_makeLibrary()
-  
+
 
 t_init(dart_no_snapshot)
 t_addSources(bin/main.cc bin/builtin.cc bin/snapshot_empty.cc)
@@ -220,7 +175,7 @@ t_linkLibraries(dart_corelib)
 t_includeDirectories(.)
 t_makeExecutable()
 
-        
+
 t_init(dart)
 t_addSources(bin/main.cc bin/builtin_nolib.cc)
 t_addSnapshotFile(bin/snapshot_in.cc ${gen_dir}/snapshot_gen gen_snapshot)
@@ -242,7 +197,7 @@ if(tests)
     t_addDartFiles(vm/snapshot_test.dart)
     t_embedDartFiles(vm/snapshot_test_in.dat ${gen_dir}/snapshot_test.dat)
     t_includeDirectoriesAbsolute(${gen_dir})
-    t_includeDirectories(. vm)
+    t_includeDirectories(.)
     t_addDefinitions(TESTING)
     t_linkLibraries(dart_corelib)
     t_makeExecutable()
@@ -262,10 +217,11 @@ if(bind)
             t_addSources(${_dir}/${_dir}_${_it}.cc)
             t_linkLibraries(dart_corelib)
             t_includeDirectories(include)
+            t_includeDirectories(.) # needed because dart_api.h isn't complete
             t_makeExecutable()
         endforeach()
     endmacro()
 
-    p_addExecutables(bind NativeFunction_foo NativeFunction_userdata NativeFunction_nativefield)
+    p_addExecutables(bind NativeFunction_foo NativeFunction_userdata NativeFunction_nativefield NativeFunction_class)
 endif()
 

@@ -71,10 +71,6 @@ class ActivationFrame : public ZoneAllocated {
                   intptr_t* end_pos,
                   Instance* value);
 
-  // Returns the value of the given variable in the context of the
-  // activation frame.
-  RawInstance* Value(const String& variable_name);
-
  private:
   void GetLocalVariables();
   RawInstance* GetLocalVarValue(intptr_t slot_index);
@@ -130,6 +126,8 @@ class Debugger {
 
   // Set breakpoint at closest location to function entry.
   Breakpoint* SetBreakpointAtEntry(const Function& target_function);
+  Breakpoint* SetBreakpointAtLine(const String& script_url,
+                                  intptr_t line_number);
 
   void VisitObjectPointers(ObjectPointerVisitor* visitor);
 
@@ -143,6 +141,8 @@ class Debugger {
   static const char* QualifiedFunctionName(const Function& func);
 
  private:
+  Breakpoint* SetBreakpoint(const Function& target_function,
+                            intptr_t token_index);
   void AddBreakpoint(Breakpoint* bpt);
 
   bool initialized_;

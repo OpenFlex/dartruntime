@@ -1,12 +1,12 @@
-// Copyright (c) 2011, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
 #ifndef VM_HEAP_H_
 #define VM_HEAP_H_
 
+#include "platform/assert.h"
 #include "vm/allocation.h"
-#include "vm/assert.h"
 #include "vm/flags.h"
 #include "vm/globals.h"
 #include "vm/pages.h"
@@ -34,7 +34,7 @@ class Heap {
 
   // Default allocation sizes in MB for the old gen and code heaps.
   static const intptr_t kHeapSizeInMB = 512;
-  static const intptr_t kCodeHeapSizeInMB = 4;
+  static const intptr_t kCodeHeapSizeInMB = 8;
 
   ~Heap();
 

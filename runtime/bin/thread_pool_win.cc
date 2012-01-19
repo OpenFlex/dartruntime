@@ -4,22 +4,11 @@
 
 #include "bin/thread_pool.h"
 
-TaskQueue::TaskQueue() : head_(NULL), tail_(NULL) {
-  UNIMPLEMENTED();
-}
-
-
-void TaskQueue::Insert(TaskQueueEntry* entry) {
-  UNIMPLEMENTED();
-}
-
-
-TaskQueueEntry* TaskQueue::Remove() {
-  UNIMPLEMENTED();
-  return NULL;
-}
-
-
 void ThreadPool::Start() {
+  UNIMPLEMENTED();
+}
+
+
+void ThreadPool::Shutdown() {
   UNIMPLEMENTED();
 }

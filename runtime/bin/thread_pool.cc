@@ -4,21 +4,58 @@
 
 #include "bin/thread_pool.h"
 
-void ThreadPool::Shutdown() {
-  UNIMPLEMENTED();
+#include "bin/thread.h"
+
+void TaskQueue::Insert(TaskQueueEntry* entry) {
+  MonitorLocker monitor(&monitor_);
+  monitor_.Enter();
+  if (head_ == NULL) {
+    head_ = entry;
+    tail_ = entry;
+    monitor.Notify();
+  } else {
+    tail_->set_next(entry);
+    tail_ = entry;
+  }
+}
+
+
+TaskQueueEntry* TaskQueue::Remove() {
+  MonitorLocker monitor(&monitor_);
+  TaskQueueEntry* result = head_;
+  while (result == NULL) {
+    if (terminate_) {
+      return NULL;
+    }
+    monitor.Wait();
+    if (terminate_) {
+      return NULL;
+    }
+    result = head_;
+  }
+  head_ = result->next();
+  ASSERT(head_ != NULL || tail_ == result);
+  return result;
+}
+
+
+void TaskQueue::Shutdown() {
+  MonitorLocker monitor(&monitor_);
+  terminate_ = true;
+  monitor.NotifyAll();
 }
 
 
 void ThreadPool::InsertTask(Task task) {
   TaskQueueEntry* entry = new TaskQueueEntry(task);
-  queue.Insert(entry);
+  queue_.Insert(entry);
 }
 
 
 Task ThreadPool::WaitForTask() {
-  TaskQueueEntry* entry = queue.Remove();
+  TaskQueueEntry* entry = queue_.Remove();
   if (entry == NULL) {
-    return -1;
+    return NULL;
   }
   Task task = entry->task();
   delete entry;
@@ -31,14 +68,13 @@ void* ThreadPool::Main(void* args) {
     printf("Thread pool thread started\n");
   }
   ThreadPool* pool = reinterpret_cast<ThreadPool*>(args);
-  while (true) {
+  while (!pool->terminate_) {
     if (Dart_IsVMFlagSet("trace_thread_pool")) {
       printf("Waiting for task\n");
     }
     Task task = pool->WaitForTask();
-    if (Dart_IsVMFlagSet("trace_thread_pool")) {
-      printf("Got task %d\n", task);
-    }
+    if (pool->terminate_) return NULL;
+    (*(pool->task_handler_))(task);
   }
   return NULL;
 };

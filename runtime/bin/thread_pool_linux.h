@@ -5,27 +5,13 @@
 #ifndef BIN_THREAD_POOL_LINUX_H_
 #define BIN_THREAD_POOL_LINUX_H_
 
+#if !defined(BIN_THREAD_POOL_H_)
+#error Do not include thread_pool_linux.h directly; use thread_pool.h instead.
+#endif
+
 #include <pthread.h>
 
-#include "vm/globals.h"
-
-
-class TaskQueueData {
- private:
-  TaskQueueData() {}
-  ~TaskQueueData() {}
-
-  pthread_mutex_t* mutex() { return &mutex_; }
-  pthread_cond_t* cond() { return &cond_; }
-
-  pthread_mutex_t mutex_;
-  pthread_cond_t cond_;
-
-  friend class TaskQueue;
-
-  DISALLOW_ALLOCATION();
-  DISALLOW_COPY_AND_ASSIGN(TaskQueueData);
-};
+#include "platform/globals.h"
 
 
 class ThreadPoolData {

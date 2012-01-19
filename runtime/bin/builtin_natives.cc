@@ -1,14 +1,15 @@
-// Copyright (c) 2011, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
+
+#include "bin/builtin.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-#include "include/dart_api.h"
-
-#include "bin/builtin.h"
 #include "bin/dartutils.h"
+#include "include/dart_api.h"
+#include "platform/assert.h"
 
 
 // List all native functions implemented in standalone dart that is used
@@ -51,7 +52,7 @@
   V(Platform_NumberOfProcessors, 0)                                            \
   V(Platform_OperatingSystem, 0)                                               \
   V(Platform_PathSeparator, 0)                                                 \
-  V(Process_Start, 8)                                                          \
+  V(Process_Start, 9)                                                          \
   V(Process_Kill, 2)                                                           \
   V(Process_Exit, 2)                                                           \
   V(ServerSocket_CreateBindListen, 4)                                          \

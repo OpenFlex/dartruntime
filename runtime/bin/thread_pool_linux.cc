@@ -6,52 +6,9 @@
 
 #include "bin/thread_pool.h"
 
-TaskQueue::TaskQueue() : head_(NULL), tail_(NULL) {
-  int result;
-
-  result = pthread_mutex_init(data_.mutex(), NULL);
-  if (result != 0) {
-    FATAL("pthread_mutex_init failed");
-  }
-
-  result = pthread_cond_init(data_.cond(), NULL);
-  if (result != 0) {
-    FATAL("pthread_cond_init failed");
-  }
-}
-
-
-void TaskQueue::Insert(TaskQueueEntry* entry) {
-  pthread_mutex_lock(data_.mutex());
-  if (head_ == NULL) {
-    head_ = entry;
-    tail_ = entry;
-    pthread_cond_signal(data_.cond());
-  } else {
-    tail_->set_next(entry);
-    tail_ = entry;
-  }
-  pthread_mutex_unlock(data_.mutex());
-}
-
-
-TaskQueueEntry* TaskQueue::Remove() {
-  pthread_mutex_lock(data_.mutex());
-  TaskQueueEntry* result = head_;
-  while (result == NULL) {
-    pthread_cond_wait(data_.cond(), data_.mutex());
-    result = head_;
-  }
-  head_ = result->next();
-  ASSERT(head_ != NULL || tail_ == result);
-  pthread_mutex_unlock(data_.mutex());
-  return result;
-}
-
-
 void ThreadPool::Start() {
   pthread_t* threads
-      = reinterpret_cast<pthread_t*>(calloc(size_, sizeof(pthread_t*)));
+      = reinterpret_cast<pthread_t*>(calloc(size_, sizeof(pthread_t*)));  // NOLINT
   data_.set_threads(threads);
   for (int i = 0; i < size_; i++) {
     pthread_t handler_thread;
@@ -63,5 +20,14 @@ void ThreadPool::Start() {
       FATAL("Create and start thread pool thread");
     }
     data_.threads()[i] = handler_thread;
+  }
+}
+
+
+void ThreadPool::Shutdown() {
+  terminate_ = true;
+  queue_.Shutdown();
+  for (int i = 0; i < size_; i++) {
+    pthread_join(data_.threads()[i], NULL);
   }
 }

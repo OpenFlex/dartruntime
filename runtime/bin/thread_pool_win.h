@@ -5,19 +5,11 @@
 #ifndef BIN_THREAD_POOL_WIN_H_
 #define BIN_THREAD_POOL_WIN_H_
 
-#include "vm/globals.h"
+#if !defined(BIN_THREAD_POOL_H_)
+#error Do not include thread_pool_win.h directly; use thread_pool.h instead.
+#endif
 
-class TaskQueueData {
- private:
-  TaskQueueData() { UNIMPLEMENTED(); }
-  ~TaskQueueData() {}
-
-  friend class TaskQueue;
-
-  DISALLOW_ALLOCATION();
-  DISALLOW_COPY_AND_ASSIGN(TaskQueueData);
-};
-
+#include "platform/globals.h"
 
 class ThreadPoolData {
  private:

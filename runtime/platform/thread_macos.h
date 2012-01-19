@@ -1,13 +1,17 @@
-// Copyright (c) 2011, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-#ifndef VM_THREAD_MACOS_H_
-#define VM_THREAD_MACOS_H_
+#ifndef PLATFORM_THREAD_MACOS_H_
+#define PLATFORM_THREAD_MACOS_H_
+
+#if !defined(PLATFORM_THREAD_H_)
+#error Do not include thread_macos.h directly; use thread.h instead.
+#endif
 
 #include <pthread.h>
 
-#include "vm/globals.h"
+#include "platform/globals.h"
 
 namespace dart {
 
@@ -62,4 +66,4 @@ class MonitorData {
 
 }  // namespace dart
 
-#endif  // VM_THREAD_MACOS_H_
+#endif  // PLATFORM_THREAD_MACOS_H_

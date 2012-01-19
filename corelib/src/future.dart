@@ -142,6 +142,12 @@ class Futures {
         }
       });
     }
+    // Special case where all the futures are already completed,
+    // trigger the value now.
+    if (futures.length == 0) {
+      completer.complete(values);
+    }
+
     return completer.future;
   }
 }

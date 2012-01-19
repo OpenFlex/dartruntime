@@ -166,8 +166,8 @@ void ActivationFrame::GetLocalVariables() {
     intptr_t activation_token_pos = TokenIndex();
     intptr_t desc_len = var_descriptors_->Length();
     for (int i = 0; i < desc_len; i++) {
-      intptr_t begin_pos, end_pos;
-      var_descriptors_->GetRange(i, &begin_pos, &end_pos);
+      intptr_t scope_id, begin_pos, end_pos;
+      var_descriptors_->GetScopeInfo(i, &scope_id, &begin_pos, &end_pos);
       if ((begin_pos <= activation_token_pos) &&
           (activation_token_pos <= end_pos)) {
         desc_indices_.Add(i);
@@ -193,15 +193,10 @@ void ActivationFrame::VariableAt(intptr_t i,
   ASSERT(name != NULL);
   intptr_t desc_index = desc_indices_[i];
   *name ^= var_descriptors_->GetName(desc_index);
-  var_descriptors_->GetRange(i, token_pos, end_pos);
+  intptr_t scope_id;
+  var_descriptors_->GetScopeInfo(i, &scope_id, token_pos, end_pos);
   ASSERT(value != NULL);
   *value = GetLocalVarValue(var_descriptors_->GetSlotIndex(i));
-}
-
-
-RawInstance* ActivationFrame::Value(const String& variable_name) {
-  UNIMPLEMENTED();
-  return NULL;
 }
 
 
@@ -279,8 +274,16 @@ RawFunction* Debugger::ResolveFunction(const Library& library,
 }
 
 
-Breakpoint* Debugger::SetBreakpointAtEntry(const Function& target_function) {
-  ASSERT(!target_function.IsNull());
+// TODO(hausner): Need to check whether a breakpoint for the
+// location already exists and either return the existing breakpoint
+// or return an error.
+Breakpoint* Debugger::SetBreakpoint(const Function& target_function,
+                                    intptr_t token_index) {
+  if ((token_index < target_function.token_index()) ||
+      (target_function.end_token_index() <= token_index)) {
+    // The given token position is not within the target function.
+    return NULL;
+  }
   if (!target_function.HasCode()) {
     Compiler::CompileFunction(target_function);
   }
@@ -288,6 +291,9 @@ Breakpoint* Debugger::SetBreakpointAtEntry(const Function& target_function) {
   ASSERT(!code.IsNull());
   PcDescriptors& desc = PcDescriptors::Handle(code.pc_descriptors());
   for (int i = 0; i < desc.Length(); i++) {
+    if (desc.TokenIndex(i) < token_index) {
+      continue;
+    }
     PcDescriptors::Kind kind = desc.DescriptorKind(i);
     Breakpoint* bpt = NULL;
     if (kind == PcDescriptors::kIcCall) {
@@ -297,22 +303,59 @@ Breakpoint* Debugger::SetBreakpointAtEntry(const Function& target_function) {
     } else if (kind == PcDescriptors::kOther) {
       if ((desc.TokenIndex(i) > 0) && CodePatcher::IsDartCall(desc.PC(i))) {
         CodePatcher::PatchStaticCallAt(
-            desc.PC(i), StubCode::BreakpointStaticEntryPoint());
+          desc.PC(i), StubCode::BreakpointStaticEntryPoint());
         bpt = new Breakpoint(target_function, i);
       }
     }
     if (bpt != NULL) {
       if (verbose) {
         OS::Print("Setting breakpoint at '%s' line %d  (PC %p)\n",
-            String::Handle(bpt->SourceUrl()).ToCString(),
-            bpt->LineNumber(),
-            bpt->pc());
+                  String::Handle(bpt->SourceUrl()).ToCString(),
+                  bpt->LineNumber(),
+                  bpt->pc());
       }
       AddBreakpoint(bpt);
       return bpt;
     }
   }
   return NULL;
+}
+
+
+Breakpoint* Debugger::SetBreakpointAtEntry(const Function& target_function) {
+  ASSERT(!target_function.IsNull());
+  return SetBreakpoint(target_function, target_function.token_index());
+}
+
+
+Breakpoint* Debugger::SetBreakpointAtLine(const String& script_url,
+                                          intptr_t line_number) {
+  Library& lib = Library::Handle();
+  Script& script = Script::Handle();
+  Isolate* isolate = Isolate::Current();
+  ASSERT(isolate != NULL);
+  lib = isolate->object_store()->registered_libraries();
+  while (!lib.IsNull()) {
+    script = lib.LookupScript(script_url);
+    if (!script.IsNull()) {
+      break;
+    }
+    lib = lib.next_registered();
+  }
+  if (script.IsNull()) {
+    return NULL;
+  }
+  intptr_t token_index_at_line = script.TokenIndexAtLine(line_number);
+  if (token_index_at_line < 0) {
+    // Script does not contain the given line number.
+    return NULL;
+  }
+  const Function& func =
+      Function::Handle(lib.LookupFunctionInScript(script, token_index_at_line));
+  if (func.IsNull()) {
+    return NULL;
+  }
+  return SetBreakpoint(func, token_index_at_line);
 }
 
 

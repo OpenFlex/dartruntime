@@ -6,7 +6,8 @@
 #define BIN_THREAD_POOL_H_
 
 #include "bin/builtin.h"
-#include "bin/globals.h"
+#include "platform/globals.h"
+#include "platform/thread.h"
 
 // Declare the OS-specific types ahead of defining the generic classes.
 #if defined(TARGET_OS_LINUX)
@@ -20,7 +21,7 @@
 #endif
 
 
-typedef int Task;
+typedef void* Task;
 
 
 class TaskQueueEntry {
@@ -43,15 +44,17 @@ class TaskQueueEntry {
 // removed from the head.
 class TaskQueue {
  public:
-  TaskQueue();
+  TaskQueue() : terminate_(false), head_(NULL), tail_(NULL) {}
 
   void Insert(TaskQueueEntry* task);
   TaskQueueEntry* Remove();
+  void Shutdown();
 
  private:
+  bool terminate_;
   TaskQueueEntry* head_;
   TaskQueueEntry* tail_;
-  TaskQueueData data_;
+  dart::Monitor monitor_;
 
   DISALLOW_COPY_AND_ASSIGN(TaskQueue);
 };
@@ -59,7 +62,12 @@ class TaskQueue {
 
 class ThreadPool {
  public:
-  explicit ThreadPool(int initial_size = 4) : size_(initial_size) {}
+  typedef void* (*TaskHandler)(void* args);
+
+  ThreadPool(TaskHandler task_handler, int initial_size = 4)
+      : terminate_(false),
+        size_(initial_size),
+        task_handler_(task_handler) {}
 
   void Start();
   void Shutdown();
@@ -71,8 +79,12 @@ class ThreadPool {
 
   static void* Main(void* args);
 
-  TaskQueue queue;
+  TaskQueue queue_;
+  // TODO(sgjesse): Move the monitor in TaskQueue to ThreadPool and
+  // obtain it for updating terminate_.
+  bool terminate_;
   int size_;  // Number of threads.
+  TaskHandler task_handler_;
   ThreadPoolData data_;
 
   DISALLOW_COPY_AND_ASSIGN(ThreadPool);

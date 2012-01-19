@@ -1,12 +1,12 @@
-// Copyright (c) 2011, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+#include "platform/thread.h"
+
 #include <sys/errno.h>
 
-#include "vm/thread.h"
-
-#include "vm/assert.h"
+#include "platform/assert.h"
 
 namespace dart {
 
@@ -65,7 +65,7 @@ Thread::Thread(ThreadStartFunction function, uword parameter) {
   result = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
   VALIDATE_PTHREAD_RESULT(result);
 
-  result = pthread_attr_setstacksize(&attr, 64 * KB);
+  result = pthread_attr_setstacksize(&attr, 128 * KB);
   VALIDATE_PTHREAD_RESULT(result);
 
   ThreadStartData* data = new ThreadStartData(function, parameter, this);
