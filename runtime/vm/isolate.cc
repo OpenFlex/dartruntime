@@ -14,7 +14,7 @@
 #include "vm/debugger.h"
 #include "vm/debuginfo.h"
 #include "vm/heap.h"
-#include "vm/message_queue.h"
+#include "vm/message.h"
 #include "vm/object_store.h"
 #include "vm/parser.h"
 #include "vm/port.h"
@@ -34,14 +34,61 @@ DEFINE_FLAG(bool, trace_isolates, false,
 DECLARE_FLAG(bool, generate_gdb_symbols);
 
 
+class IsolateMessageHandler : public MessageHandler {
+ public:
+  explicit IsolateMessageHandler(Isolate* isolate);
+  ~IsolateMessageHandler();
+
+  const char* name() const;
+  void MessageNotify(Message::Priority priority);
+
+#if defined(DEBUG)
+  // Check that it is safe to access this handler.
+  void CheckAccess();
+#endif
+ private:
+  Isolate* isolate_;
+};
+
+
+IsolateMessageHandler::IsolateMessageHandler(Isolate* isolate)
+    : isolate_(isolate) {
+}
+
+
+IsolateMessageHandler::~IsolateMessageHandler() {
+}
+
+const char* IsolateMessageHandler::name() const {
+  return isolate_->name();
+}
+
+
+void IsolateMessageHandler::MessageNotify(Message::Priority priority) {
+  if (priority >= Message::kOOBPriority) {
+    // Handle out of band messages even if the isolate is busy.
+    // isolate_->ScheduleInterrupts(Isolate::kMessageInterrupt);
+    UNIMPLEMENTED();
+  }
+  Dart_MessageNotifyCallback callback = isolate_->message_notify_callback();
+  if (callback) {
+    // Allow the embedder to handle message notification.
+    (*callback)(Api::CastIsolate(isolate_));
+  }
+}
+
+
+#if defined(DEBUG)
+void IsolateMessageHandler::CheckAccess() {
+  ASSERT(isolate_ == Isolate::Current());
+}
+#endif
+
+
 Isolate::Isolate()
     : store_buffer_(),
-      message_queue_(NULL),
-      post_message_callback_(NULL),
-      close_port_callback_(NULL),
+      message_notify_callback_(NULL),
       name_(NULL),
-      num_ports_(0),
-      live_ports_(0),
       main_port_(0),
       heap_(NULL),
       object_store_(NULL),
@@ -73,7 +120,6 @@ Isolate::Isolate()
 
 Isolate::~Isolate() {
   delete [] name_;
-  delete message_queue_;
   delete heap_;
   delete object_store_;
   // Do not delete stack resources: top_resource_ and current_zone_.
@@ -84,31 +130,8 @@ Isolate::~Isolate() {
   delete debugger_;
   delete mutex_;
   mutex_ = NULL;  // Fail fast if interrupts are scheduled on a dead isolate.
-}
-
-
-static bool StandardPostMessageCallback(Dart_Isolate dart_isolate,
-                                        Dart_Port dest_port,
-                                        Dart_Port reply_port,
-                                        Dart_Message dart_message) {
-  Isolate* isolate = reinterpret_cast<Isolate*>(dart_isolate);
-  ASSERT(isolate != NULL);
-  PortMessage* message = new PortMessage(dest_port, reply_port, dart_message);
-  isolate->message_queue()->Enqueue(message);
-  return true;
-}
-
-
-static void StandardClosePortCallback(Dart_Isolate dart_isolate,
-                                      Dart_Port port) {
-  // Remove the pending messages for this port.
-  Isolate* isolate = reinterpret_cast<Isolate*>(dart_isolate);
-  ASSERT(isolate != NULL);
-  if (port == kCloseAllPorts) {
-    isolate->message_queue()->FlushAll();
-  } else {
-    isolate->message_queue()->Flush(port);
-  }
+  delete message_handler_;
+  message_handler_ = NULL;  // Fail fast if we send messages to a dead isolate.
 }
 
 
@@ -120,12 +143,10 @@ Isolate* Isolate::Init(const char* name_prefix) {
   // the current isolate.
   SetCurrent(result);
 
-  // Set up the isolate message queue.
-  MessageQueue* queue = new MessageQueue();
-  ASSERT(queue != NULL);
-  result->set_message_queue(queue);
-  result->set_post_message_callback(&StandardPostMessageCallback);
-  result->set_close_port_callback(&StandardClosePortCallback);
+  // Setup the isolate message handler.
+  MessageHandler* handler = new IsolateMessageHandler(result);
+  ASSERT(handler != NULL);
+  result->set_message_handler(handler);
 
   // Setup the Dart API state.
   ApiState* state = new ApiState();
@@ -137,13 +158,13 @@ Isolate* Isolate::Init(const char* name_prefix) {
   // TODO(5411455): Need to figure out how to set the stack limit for the
   // main thread.
   result->SetStackLimitFromCurrentTOS(reinterpret_cast<uword>(&result));
-  result->set_main_port(PortMap::CreatePort());
+  result->set_main_port(PortMap::CreatePort(result->message_handler()));
   result->BuildName(name_prefix);
 
   result->debugger_ = new Debugger();
   result->debugger_->Initialize(result);
   if (FLAG_trace_isolates) {
-    if (strcmp(name_prefix, "vm-isolate") != 0) {
+    if (name_prefix == NULL || strcmp(name_prefix, "vm-isolate") != 0) {
       OS::Print("[+] Starting isolate:\n"
                 "\tisolate:    %s\n", result->name());
     }
@@ -194,7 +215,7 @@ void Isolate::ScheduleInterrupts(uword interrupt_bits) {
   mutex_->Lock();
   ASSERT((interrupt_bits & ~kInterruptsMask) == 0);  // Must fit in mask.
   if (stack_limit_ == saved_stack_limit_) {
-    stack_limit_ = ~static_cast<uword>(0) & ~kInterruptsMask;
+    stack_limit_ = (~static_cast<uword>(0)) & ~kInterruptsMask;
   }
   stack_limit_ |= interrupt_bits;
   mutex_->Unlock();
@@ -264,11 +285,21 @@ void Isolate::Shutdown() {
   ASSERT(top_resource_ == NULL);
   ASSERT((heap_ == NULL) || heap_->Verify());
 
-  // Close all the ports owned by this isolate.
-  PortMap::ClosePorts();
+  // Clean up debugger resources. Shutting down the debugger
+  // requires a handle zone. We must set up a temporary zone because
+  // Isolate::Shutdown is called without a zone.
+  {
+    Zone zone(this);
+    HandleScope handle_scope(this);
+    debugger_->Shutdown();
+  }
 
-  delete message_queue();
-  set_message_queue(NULL);
+  // Close all the ports owned by this isolate.
+  PortMap::ClosePorts(message_handler());
+
+  // Fail fast if anybody tries to post any more messsages to this isolate.
+  delete message_handler();
+  set_message_handler(NULL);
 
   // Dump all accumalated timer data for the isolate.
   timer_list_.ReportTimers();
@@ -327,32 +358,40 @@ static RawInstance* DeserializeMessage(void* data) {
 
 
 
-RawObject* Isolate::StandardRunLoop() {
-  ASSERT(long_jump_base() != NULL);
-  ASSERT(post_message_callback() == &StandardPostMessageCallback);
-  ASSERT(close_port_callback() == &StandardClosePortCallback);
+RawError* Isolate::StandardRunLoop() {
+  ASSERT(message_notify_callback() == NULL);
+  ASSERT(message_handler() != NULL);
 
-  while (live_ports() > 0) {
+  while (message_handler()->HasLivePorts()) {
     ASSERT(this == Isolate::Current());
     Zone zone(this);
     HandleScope handle_scope(this);
 
-    PortMessage* message = message_queue()->Dequeue(0);
+    Message* message = message_handler()->queue()->Dequeue(0);
     if (message != NULL) {
+      if (message->priority() >= Message::kOOBPriority) {
+        // TODO(turnidge): Out of band messages will not go through the
+        // regular message handler.  Instead they will be dispatched to
+        // special vm code.  Implement.
+        UNIMPLEMENTED();
+      }
       const Instance& msg =
           Instance::Handle(DeserializeMessage(message->data()));
       const Object& result = Object::Handle(
           DartLibraryCalls::HandleMessage(
               message->dest_port(), message->reply_port(), msg));
       delete message;
-      if (result.IsUnhandledException()) {
-        return result.raw();
+      if (result.IsError()) {
+        Error& error = Error::Handle();
+        error ^= result.raw();
+        return error.raw();
       }
+      ASSERT(result.IsNull());
     }
   }
 
   // Indicates success.
-  return Object::null();
+  return Error::null();
 }
 
 

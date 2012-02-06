@@ -19,6 +19,41 @@ typedef void Dart_BreakpointHandler(
 
 
 /**
+ * Returns a list of urls (strings) of all the libraries loaded in the
+ * current isolate.
+ *
+ * Requires there to be a current isolate.
+ *
+ * \return A handle to a list of string handles.
+ */
+DART_EXPORT Dart_Handle Dart_GetLibraryURLs();
+
+
+/**
+ * Returns a list of urls (strings) of all the scripts loaded in the
+ * given library.
+ *
+ * Requires there to be a current isolate.
+ *
+ * \return A handle to a list of string handles.
+ */
+DART_EXPORT Dart_Handle Dart_GetScriptURLs(Dart_Handle library_url);
+
+
+/**
+ * Returns a string containing the source code of the given script
+ * in the given library.
+ *
+ * Requires there to be a current isolate.
+ *
+ * \return A handle to string containing the source text if no error
+ * occurs.
+ */
+DART_EXPORT Dart_Handle Dart_GetScriptSource(
+                            Dart_Handle library_url_in,
+                            Dart_Handle script_url_in);
+
+/**
  * Sets a breakpoint at line \line_number in \script_url, or the closest
  * following line (within the same function) where a breakpoint can be set.
  *
@@ -52,6 +87,17 @@ DART_EXPORT Dart_Handle Dart_SetBreakpointAtEntry(
                             Dart_Handle class_name,
                             Dart_Handle function_name,
                             Dart_Breakpoint* breakpoint);
+
+
+/**
+ * Deletes the given \breakpoint.
+ *
+ * Requires there to be a current isolate.
+ *
+ * \return A handle to the True object if no error occurs.
+ */
+DART_EXPORT Dart_Handle Dart_DeleteBreakpoint(
+                            Dart_Breakpoint breakpoint);
 
 
 /**
@@ -110,6 +156,71 @@ DART_EXPORT Dart_Handle Dart_ActivationFrameInfo(
                             Dart_Handle* function_name,
                             Dart_Handle* script_url,
                             intptr_t* line_number);
+
+
+/**
+ * Returns an array containing all the local variable names and values of
+ * the given \activation_frame.
+ *
+ * Requires there to be a current isolate.
+ *
+ * \return A handle to an array containing variable names and
+ * corresponding values. The array is empty if the activation frame has
+ * no variables. If non-empty, variable names are at array offsets 2*n,
+ * values at offset 2*n+1.
+ */
+DART_EXPORT Dart_Handle Dart_GetLocalVariables(
+                            Dart_ActivationFrame activation_frame);
+
+
+/**
+ * Returns the class of the given \object.
+ *
+ * Requires there to be a current isolate.
+ *
+ * \return A handle to the class object.
+ */
+DART_EXPORT Dart_Handle Dart_GetObjClass(Dart_Handle object);
+
+
+/**
+ * Returns the superclass of the given class \cls.
+ *
+ * Requires there to be a current isolate.
+ *
+ * \return A handle to the class object.
+ */
+DART_EXPORT Dart_Handle Dart_GetSuperclass(Dart_Handle cls);
+
+
+/**
+ * Returns an array containing all instance field names and values of
+ * the given \object.
+ *
+ * Requires there to be a current isolate.
+ *
+ * \return A handle to an array containing field names and
+ * corresponding field values. The array is empty if the object has
+ * no fields. If non-empty, field names are at array offsets 2*n,
+ * values at offset 2*n+1. Field values may also be a handle to an
+ * error object if an error was encountered evaluating the field.
+ */
+DART_EXPORT Dart_Handle Dart_GetInstanceFields(Dart_Handle object);
+
+
+/**
+ * Returns an array containing all static field names and values of
+ * the given class \cls.
+ *
+ * Requires there to be a current isolate.
+ *
+ * \return A handle to an array containing field names and
+ * corresponding field values. The array is empty if the class has
+ * no static fields. If non-empty, field names are at array offsets 2*n,
+ * values at offset 2*n+1. Field values may also be a handle to an
+ * error object if an error was encountered evaluating the field.
+ */
+DART_EXPORT Dart_Handle Dart_GetStaticFields(Dart_Handle cls);
 
 
 #endif  // INCLUDE_DART_DEBUGGER_API_H_

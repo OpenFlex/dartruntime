@@ -1,4 +1,4 @@
-// Copyright (c) 2011, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -37,7 +37,8 @@ class IllegalAccessException implements Exception {
 class NoSuchMethodException implements Exception {
   const NoSuchMethodException(Object this._receiver,
                               String this._functionName,
-                              List this._arguments);
+                              List this._arguments,
+                              [String this._extraMessage = ""]);
 
   String toString() {
     StringBuffer sb = new StringBuffer();
@@ -48,13 +49,15 @@ class NoSuchMethodException implements Exception {
       sb.add(_arguments[i]);
     }
     sb.add("]");
+    var x = _extraMessage;
     return "NoSuchMethodException - receiver: '$_receiver' " +
-           "function name: '$_functionName' arguments: [$sb]";
+           "function name: '$_functionName' arguments: [$sb]$x";
   }
 
   final Object _receiver;
   final String _functionName;
   final List _arguments;
+  final String _extraMessage;
 }
 
 
@@ -71,9 +74,9 @@ class ObjectNotClosureException implements Exception {
 
 
 class IllegalArgumentException implements Exception {
-  const IllegalArgumentException([args = ""]) : _args = args;
-  String toString() => "Illegal argument(s): $_args";
-  final String _args;
+  const IllegalArgumentException([arg = ""]) : _arg = arg;
+  String toString() => "Illegal argument(s): $_arg";
+  final _arg;
 }
 
 

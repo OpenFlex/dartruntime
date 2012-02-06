@@ -35,6 +35,7 @@ class ObjectStore {
     kBoolInterface,
     kStringInterface,
     kListInterface,
+    kByteArrayInterface,
     kObjectClass,
     kSmiClass,
     kMintClass,
@@ -49,7 +50,8 @@ class ObjectStore {
     kBoolClass,
     kArrayClass,
     kImmutableArrayClass,
-    kByteBufferClass,
+    kInternalByteArrayClass,
+    kExternalByteArrayClass,
     kStacktraceClass,
     kJSRegExpClass,
     kMaxId,
@@ -181,14 +183,28 @@ class ObjectStore {
     return OFFSET_OF(ObjectStore, array_class_);
   }
 
+  RawType* byte_array_interface() const { return byte_array_interface_; }
+  void set_byte_array_interface(const Type& value) {
+    byte_array_interface_ = value.raw();
+  }
+
   RawClass* immutable_array_class() const { return immutable_array_class_; }
   void set_immutable_array_class(const Class& value) {
     immutable_array_class_ = value.raw();
   }
 
-  RawClass* byte_buffer_class() const { return byte_buffer_class_; }
-  void set_byte_buffer_class(const Class& value) {
-    byte_buffer_class_ = value.raw();
+  RawClass* internal_byte_array_class() const {
+    return internal_byte_array_class_;
+  }
+  void set_internal_byte_array_class(const Class& value) {
+    internal_byte_array_class_ = value.raw();
+  }
+
+  RawClass* external_byte_array_class() const {
+    return external_byte_array_class_;
+  }
+  void set_external_byte_array_class(const Class& value) {
+    external_byte_array_class_ = value.raw();
   }
 
   RawClass* stacktrace_class() const {
@@ -260,6 +276,7 @@ class ObjectStore {
     ASSERT(!value.IsNull());
     sticky_error_ = value.raw();
   }
+  void clear_sticky_error() { sticky_error_ = Error::null(); }
 
   RawBool* true_value() const { return true_value_; }
   void set_true_value(const Bool& value) { true_value_ = value.raw(); }
@@ -329,7 +346,9 @@ class ObjectStore {
   RawType* list_interface_;
   RawClass* array_class_;
   RawClass* immutable_array_class_;
-  RawClass* byte_buffer_class_;
+  RawType* byte_array_interface_;
+  RawClass* internal_byte_array_class_;
+  RawClass* external_byte_array_class_;
   RawClass* stacktrace_class_;
   RawClass* jsregexp_class_;
   RawBool* true_value_;

@@ -19,11 +19,11 @@ class _FileInputStream extends _BaseDataInputStream implements InputStream {
   }
 
   List<int> _read(int bytesToRead) {
-    List<int> result = new List<int>(bytesToRead);
+    ByteArray result = new ByteArray(bytesToRead);
     int bytesRead = _file.readListSync(result, 0, bytesToRead);
     if (bytesRead < bytesToRead) {
-      List<int> buffer = new List<int>(bytesRead);
-      buffer.copyFrom(result, 0, 0, bytesRead);
+      ByteArray buffer = new ByteArray(bytesRead);
+      buffer.setRange(0, bytesRead, result);
       result = buffer;
     }
     _checkScheduleCallbacks();
@@ -94,7 +94,7 @@ class _FileOutputStream implements OutputStream {
 class _FileOperation {
   abstract void execute(ReceivePort port);
 
-  SendPort set replyPort(SendPort port) {
+  void set replyPort(SendPort port) {
     _replyPort = port;
   }
 
@@ -175,7 +175,7 @@ class _ReadListOperation extends _FileOperation {
                       port.toSendPort());
       return;
     }
-    var buffer = new List(_bytes);
+    ByteArray buffer = new ByteArray(_bytes);
     var result =
         new _ReadListResult(_FileUtils.readList(_id, buffer, 0, _bytes),
                             buffer);
@@ -421,19 +421,24 @@ class _FileUtils {
       native "File_ReadList";
   static int writeByte(int id, int value) native "File_WriteByte";
   static int writeList(int id, List<int> buffer, int offset, int bytes) {
-    // When using the Dart C API access to ObjectArray by index is
+    // When using the Dart C API to access raw data, using a ByteArray is
     // currently much faster. This function will make a copy of the
-    // supplied List to an ObjectArray if it isn't already.
-    ObjectArray outBuffer;
+    // supplied List to a ByteArray if it isn't already.
+    List outBuffer;
     int outOffset = offset;
-    if (buffer is ObjectArray) {
+    if (buffer is ByteArray || buffer is ObjectArray) {
       outBuffer = buffer;
     } else {
-      outBuffer = new ObjectArray(bytes);
+      outBuffer = new ByteArray(bytes);
       outOffset = 0;
       int j = offset;
       for (int i = 0; i < bytes; i++) {
-        outBuffer[i] = buffer[j];
+        int value = buffer[j];
+        if (value is! int) {
+          throw new FileIOException(
+              "List element is not an integer at index $j");
+        }
+        outBuffer[i] = value;
         j++;
       }
     }
@@ -497,10 +502,12 @@ class _File implements File {
       }
       return;
     }
-    var handler =
-        (_existsHandler != null) ? _existsHandler : (result) => null;
     var operation = new _ExistsOperation(_name);
-    _scheduler.enqueue(operation, (result, ignored) { _existsHandler(result); });
+    _scheduler.enqueue(operation, (result, ignored) {
+      var handler =
+          (_existsHandler != null) ? _existsHandler : (result) => null;
+      handler(result);
+    });
   }
 
   bool existsSync() {
@@ -516,8 +523,8 @@ class _File implements File {
 
   void create() {
     _asyncUsed = true;
-    var handler = (_createHandler != null) ? _createHandler : () => null;
     var handleCreateResult = (created, ignored) {
+      var handler = (_createHandler != null) ? _createHandler : () => null;
       if (created) {
         handler();
       } else if (_errorHandler != null) {
@@ -541,8 +548,8 @@ class _File implements File {
 
   void delete() {
     _asyncUsed = true;
-    var handler = (_deleteHandler != null) ? _deleteHandler : () => null;
     var handleDeleteResult = (created, ignored) {
+      var handler = (_deleteHandler != null) ? _deleteHandler : () => null;
       if (created) {
         handler();
       } else if (_errorHandler != null) {
@@ -575,13 +582,13 @@ class _File implements File {
         return;
       }
     }
-    // If no open handler is present, close the file immediately to
-    // avoid leaking an open file descriptor.
-    var handler = _openHandler;
-    if (handler === null) {
-      handler = (file) => file.close();
-    }
     var handleOpenResult = (id, ignored) {
+      // If no open handler is present, close the file immediately to
+      // avoid leaking an open file descriptor.
+      var handler = _openHandler;
+      if (handler === null) {
+        handler = (file) => file.close();
+      }
       if (id != 0) {
         var randomAccessFile = new _RandomAccessFile(id, _name);
         handler(randomAccessFile);
@@ -589,7 +596,7 @@ class _File implements File {
         _errorHandler("Cannot open file: $_name");
       }
     };
-    var operation = new _OpenOperation(_name, mode.mode);
+    var operation = new _OpenOperation(_name, mode._mode);
     _scheduler.enqueue(operation, handleOpenResult);
   }
 
@@ -604,7 +611,7 @@ class _File implements File {
       throw new FileIOException("Unknown file mode. Use FileMode.READ, " +
                                 "FileMode.WRITE or FileMode.APPEND.");
     }
-    var id = _FileUtils.checkedOpen(_name, mode.mode);
+    var id = _FileUtils.checkedOpen(_name, mode._mode);
     if (id == 0) {
       throw new FileIOException("Cannot open file: $_name");
     }
@@ -613,9 +620,9 @@ class _File implements File {
 
   void fullPath() {
     _asyncUsed = true;
-    var handler = _fullPathHandler;
-    if (handler == null) handler = (path) => null;
     var handleFullPathResult = (result, ignored) {
+      var handler = _fullPathHandler;
+      if (handler == null) handler = (path) => null;
       if (result != null) {
         handler(result);
       } else if (_errorHandler != null) {
@@ -689,8 +696,8 @@ class _RandomAccessFile implements RandomAccessFile {
 
   void close() {
     _asyncUsed = true;
-    var handler = (_closeHandler != null) ? _closeHandler : () => null;
-    var handleOpenResult = (result, ignored) {
+    var handleCloseResult = (result, ignored) {
+      var handler = (_closeHandler != null) ? _closeHandler : () => null;
       if (result != -1) {
         _id = result;
         handler();
@@ -699,7 +706,7 @@ class _RandomAccessFile implements RandomAccessFile {
       }
     };
     var operation = new _CloseOperation(_id);
-    _scheduler.enqueue(operation, handleOpenResult);
+    _scheduler.enqueue(operation, handleCloseResult);
   }
 
   void closeSync() {
@@ -716,9 +723,9 @@ class _RandomAccessFile implements RandomAccessFile {
 
   void readByte() {
     _asyncUsed = true;
-    var handler =
-        (_readByteHandler != null) ? _readByteHandler : (byte) => null;
     var handleReadByteResult = (result, ignored) {
+      var handler =
+          (_readByteHandler != null) ? _readByteHandler : (byte) => null;
       if (result != -1) {
         handler(result);
       } else if (_errorHandler != null) {
@@ -749,9 +756,9 @@ class _RandomAccessFile implements RandomAccessFile {
       }
       return;
     };
-    var handler =
-        (_readListHandler != null) ? _readListHandler : (result) => null;
     var handleReadListResult = (result, ignored) {
+      var handler =
+          (_readListHandler != null) ? _readListHandler : (result) => null;
       if (result is _ReadListResult && result.read != -1) {
         var read = result.read;
         buffer.setRange(offset, read, result.buffer);
@@ -904,8 +911,9 @@ class _RandomAccessFile implements RandomAccessFile {
 
   void position() {
     _asyncUsed = true;
-    var handler = (_positionHandler != null) ? _positionHandler : (pos) => null;
     var handlePositionResult = (result, ignored) {
+      var handler =
+          (_positionHandler != null) ? _positionHandler : (pos) => null;
       if (result == -1 && _errorHandler != null) {
         _errorHandler("position failed");
         return;
@@ -930,9 +938,9 @@ class _RandomAccessFile implements RandomAccessFile {
 
   void setPosition(int position) {
     _asyncUsed = true;
-    var handler =
-        (_setPositionHandler != null) ? _setPositionHandler : () => null;
     var handleSetPositionResult = (result, ignored) {
+      var handler =
+          (_setPositionHandler != null) ? _setPositionHandler : () => null;
       if (result == false && _errorHandler != null) {
         _errorHandler("setPosition failed");
         return;
@@ -953,11 +961,11 @@ class _RandomAccessFile implements RandomAccessFile {
       throw new FileIOException("setPosition failed");
     }
   }
-  
+
   void truncate(int length) {
     _asyncUsed = true;
-    var handler = (_truncateHandler != null) ? _truncateHandler : () => null;
     var handleTruncateResult = (result, ignored) {
+      var handler = (_truncateHandler != null) ? _truncateHandler : () => null;
       if (result == false && _errorHandler != null) {
         _errorHandler("truncate failed");
         return;
@@ -981,8 +989,8 @@ class _RandomAccessFile implements RandomAccessFile {
 
   void length() {
     _asyncUsed = true;
-    var handler = (_lengthHandler != null) ? _lengthHandler : (pos) => null;
     var handleLengthResult = (result, ignored) {
+      var handler = (_lengthHandler != null) ? _lengthHandler : (pos) => null;
       if (result == -1 && _errorHandler != null) {
         _errorHandler("length failed");
         return;
@@ -1007,8 +1015,8 @@ class _RandomAccessFile implements RandomAccessFile {
 
   void flush() {
     _asyncUsed = true;
-    var handler = (_flushHandler != null) ? _flushHandler : (pos) => null;
     var handleFlushResult = (result, ignored) {
+      var handler = (_flushHandler != null) ? _flushHandler : (pos) => null;
       if (result == -1 && _errorHandler != null) {
         _errorHandler("flush failed");
         return;

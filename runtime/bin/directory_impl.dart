@@ -1,4 +1,4 @@
-// Copyright (c) 2011, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -39,7 +39,7 @@ class _DirectoryListingIsolate extends Isolate {
 class _DirectoryOperation {
   abstract void execute(ReceivePort port);
 
-  SendPort set replyPort(SendPort port) {
+  void set replyPort(SendPort port) {
     _replyPort = port;
   }
 
@@ -94,13 +94,14 @@ class _DirCreateTempOperation extends _DirectoryOperation {
 
 
 class _DirDeleteOperation extends _DirectoryOperation {
-  _DirDeleteOperation(String this._path);
+  _DirDeleteOperation(String this._path, bool this._recursive);
 
   void execute(ReceivePort port) {
-    _replyPort.send(_Directory._delete(_path), port.toSendPort());
+    _replyPort.send(_Directory._delete(_path, _recursive), port.toSendPort());
   }
 
   String _path;
+  bool _recursive;
 }
 
 
@@ -168,7 +169,7 @@ class _Directory implements Directory {
                             _OSStatus status) native "Directory_CreateTemp";
   static int _exists(String path) native "Directory_Exists";
   static bool _create(String path) native "Directory_Create";
-  static bool _delete(String path) native "Directory_Delete";
+  static bool _delete(String path, bool recursive) native "Directory_Delete";
   static bool _listSync(String dir,
                         bool recursive,
                         bool fullPaths,
@@ -206,9 +207,10 @@ class _Directory implements Directory {
   }
 
   void exists() {
-    var handler = (_existsHandler != null) ? _existsHandler : (result) => null;
     var operation = new _DirExistsOperation(_path);
     _scheduler.enqueue(operation, (result, ignored) {
+      var handler =
+          (_existsHandler != null) ? _existsHandler : (result) => null;
       if (result < 0) {
         if (_errorHandler != null) {
           _errorHandler("Diretory exists test failed: $_path");
@@ -228,9 +230,9 @@ class _Directory implements Directory {
   }
 
   void create() {
-    var handler = (_createHandler != null) ? _createHandler : () => null;
     var operation = new _DirCreateOperation(_path);
     _scheduler.enqueue(operation, (result, ignored) {
+      var handler = (_createHandler != null) ? _createHandler : () => null;
       if (result) {
         handler();
       } else if (_errorHandler != null) {
@@ -246,10 +248,10 @@ class _Directory implements Directory {
   }
 
   void createTemp() {
-    var handler =
-        (_createTempHandler != null) ? _createTempHandler : () => null;
     var operation = new _DirCreateTempOperation(_path);
     _scheduler.enqueue(operation, (result, ignored) {
+      var handler =
+          (_createTempHandler != null) ? _createTempHandler : () => null;
       if (result is !_OSStatus) {
         _path = result;
         handler();
@@ -273,20 +275,24 @@ class _Directory implements Directory {
     }
   }
 
-  void delete() {
-    var handler = (_deleteHandler != null) ? _deleteHandler : () => null;
-    var operation = new _DirDeleteOperation(_path);
+  void delete([bool recursive = false]) {
+    var operation = new _DirDeleteOperation(_path, recursive);
     _scheduler.enqueue(operation, (result, ignored) {
+      var handler = (_deleteHandler != null) ? _deleteHandler : () => null;
       if (result) {
         handler();
       } else if (_errorHandler != null) {
-        _errorHandler("Directory deletion failed: $_path");
+        if (recursive) {
+          _errorHandler("Recursive directory deletion failed: $_path");
+        } else {
+          _errorHandler("Non-recursive directory deletion failed: $_path");
+        }
       }
     });
   }
 
-  void deleteSync() {
-    if (!_delete(_path)) {
+  void deleteSync([bool recursive = false]) {
+    if (!_delete(_path, recursive)) {
       throw new DirectoryException("Directory deletion failed: $_path");
     }
   }

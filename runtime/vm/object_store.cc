@@ -6,7 +6,6 @@
 
 #include "vm/exceptions.h"
 #include "vm/isolate.h"
-#include "vm/longjump.h"
 #include "vm/object.h"
 #include "vm/raw_object.h"
 #include "vm/visitor.h"
@@ -35,7 +34,9 @@ ObjectStore::ObjectStore()
     list_interface_(Type::null()),
     array_class_(Class::null()),
     immutable_array_class_(Class::null()),
-    byte_buffer_class_(Class::null()),
+    byte_array_interface_(Type::null()),
+    internal_byte_array_class_(Class::null()),
+    external_byte_array_class_(Class::null()),
     stacktrace_class_(Class::null()),
     jsregexp_class_(Class::null()),
     true_value_(Bool::null()),
@@ -78,23 +79,26 @@ bool ObjectStore::PreallocateObjects() {
   if (preallocate_objects_called_) {
     return true;
   }
-
   Isolate* isolate = Isolate::Current();
   ASSERT(isolate != NULL && isolate->object_store() == this);
-  LongJump* base = isolate->long_jump_base();
-  LongJump jump;
-  isolate->set_long_jump_base(&jump);
-  if (setjmp(*jump.Set()) == 0) {
-    GrowableArray<const Object*> args;
-    Instance& exception =Instance::Handle();
-    exception = Exceptions::Create(Exceptions::kStackOverflow, args);
-    set_stack_overflow(exception);
-    exception = Exceptions::Create(Exceptions::kOutOfMemory, args);
-    set_out_of_memory(exception);
-  } else {
+  GrowableArray<const Object*> args;
+  Object& result = Object::Handle();
+  Instance& exception = Instance::Handle();
+
+  result = Exceptions::Create(Exceptions::kStackOverflow, args);
+  if (result.IsError()) {
     return false;
   }
-  isolate->set_long_jump_base(base);
+  exception ^= result.raw();
+  set_stack_overflow(exception);
+
+  result = Exceptions::Create(Exceptions::kOutOfMemory, args);
+  if (result.IsError()) {
+    return false;
+  }
+  exception ^= result.raw();
+  set_out_of_memory(exception);
+
   preallocate_objects_called_ = true;
   return true;
 }
@@ -116,7 +120,8 @@ RawClass* ObjectStore::GetClass(int index) {
     case kBoolClass: return bool_class_;
     case kArrayClass: return array_class_;
     case kImmutableArrayClass: return immutable_array_class_;
-    case kByteBufferClass: return byte_buffer_class_;
+    case kInternalByteArrayClass: return internal_byte_array_class_;
+    case kExternalByteArrayClass: return external_byte_array_class_;
     case kStacktraceClass: return stacktrace_class_;
     case kJSRegExpClass: return jsregexp_class_;
     default: break;
@@ -156,8 +161,10 @@ int ObjectStore::GetClassIndex(const RawClass* raw_class) {
     return kArrayClass;
   } else if (raw_class == immutable_array_class_) {
     return kImmutableArrayClass;
-  } else if (raw_class == byte_buffer_class_) {
-    return kByteBufferClass;
+  } else if (raw_class == internal_byte_array_class_) {
+    return kInternalByteArrayClass;
+  } else if (raw_class == external_byte_array_class_) {
+    return kExternalByteArrayClass;
   } else if (raw_class == stacktrace_class_) {
     return kStacktraceClass;
   } else if (raw_class == jsregexp_class_) {
@@ -180,6 +187,7 @@ RawType* ObjectStore::GetType(int index) {
     case kBoolInterface: return bool_interface();
     case kStringInterface: return string_interface();
     case kListInterface: return list_interface();
+    case kByteArrayInterface: return byte_array_interface();
     default: break;
   }
   UNREACHABLE();
@@ -211,6 +219,8 @@ int ObjectStore::GetTypeIndex(const RawType* raw_type) {
     return kStringInterface;
   } else if (raw_type == list_interface()) {
     return kListInterface;
+  } else if (raw_type == byte_array_interface()) {
+    return kByteArrayInterface;
   }
   return kInvalidIndex;
 }

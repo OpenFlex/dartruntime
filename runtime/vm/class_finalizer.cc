@@ -224,9 +224,11 @@ void ClassFinalizer::VerifyBootstrapClasses() {
   cls = object_store->array_class();
   ASSERT(Array::InstanceSize() == cls.instance_size());
   cls = object_store->immutable_array_class();
-  ASSERT(Array::InstanceSize() == cls.instance_size());
-  cls = object_store->byte_buffer_class();
-  ASSERT(ByteBuffer::InstanceSize() == cls.instance_size());
+  ASSERT(ImmutableArray::InstanceSize() == cls.instance_size());
+  cls = object_store->internal_byte_array_class();
+  ASSERT(InternalByteArray::InstanceSize() == cls.instance_size());
+  cls = object_store->external_byte_array_class();
+  ASSERT(ExternalByteArray::InstanceSize() == cls.instance_size());
 #endif  // defined(DEBUG)
 
   // Remember the currently pending classes.
@@ -259,19 +261,12 @@ void ClassFinalizer::VerifyBootstrapClasses() {
 RawClass* ClassFinalizer::ResolveClass(
     const Class& cls, const UnresolvedClass& unresolved_class) {
   Library& lib = Library::Handle();
-  if (unresolved_class.qualifier() == String::null()) {
+  if (unresolved_class.library_prefix() == LibraryPrefix::null()) {
     lib = cls.library();
   } else {
-    const String& qualifier = String::Handle(unresolved_class.qualifier());
     LibraryPrefix& lib_prefix = LibraryPrefix::Handle();
-    lib_prefix = cls.LookupLibraryPrefix(qualifier);
-    if (lib_prefix.IsNull()) {
-      const Script& script = Script::Handle(cls.script());
-      ReportError(script, unresolved_class.token_index(),
-                  "cannot resolve library prefix '%s' from '%s'.\n",
-                  String::Handle(unresolved_class.Name()).ToCString(),
-                  String::Handle(cls.Name()).ToCString());
-    }
+    lib_prefix = unresolved_class.library_prefix();
+    ASSERT(!lib_prefix.IsNull());
     lib = lib_prefix.library();
   }
   ASSERT(!lib.IsNull());
@@ -332,7 +327,8 @@ void ClassFinalizer::ResolveSuperType(const Class& cls) {
         (super_class.raw() == object_store->array_class()) ||
         (super_class.raw() == object_store->immutable_array_class()) ||
         (super_class.raw() == growable_object_array_class.raw()) ||
-        (super_class.raw() == object_store->byte_buffer_class()) ||
+        (super_class.raw() == object_store->internal_byte_array_class()) ||
+        (super_class.raw() == object_store->external_byte_array_class()) ||
         (super_class.raw() == integer_implementation_class.raw()) ||
         (super_class.raw() == object_store->smi_class()) ||
         (super_class.raw() == object_store->mint_class()) ||
@@ -375,47 +371,67 @@ void ClassFinalizer::ResolveDefaultClass(const Class& interface) {
                 factory_name.ToCString());
   }
   interface.set_factory_class(factory_class);
-  // Check that the type parameter lists are identical.
+  ResolveAndFinalizeUpperBounds(factory_class);
+  const intptr_t num_factory_type_params = factory_class.NumTypeParameters();
   const Class& factory_signature_class = Class::Handle(
       unresolved_factory_class.factory_signature_class());
   ASSERT(!factory_signature_class.IsNull());
-  ResolveAndFinalizeUpperBounds(factory_class);
-  ResolveAndFinalizeUpperBounds(factory_signature_class);
-  const intptr_t num_type_params = factory_signature_class.NumTypeParameters();
-  bool mismatch = factory_class.NumTypeParameters() != num_type_params;
-  if (mismatch && (num_type_params == 0)) {
-    // TODO(regis): For now, and until the core lib is fixed, we accept a
-    // factory clause with a class missing its list of type parameters.
-    // See bug 5408808.
-    const String& interface_name = String::Handle(interface.Name());
-    const String& factory_name = String::Handle(factory_class.Name());
-    const Script& script = Script::Handle(interface.script());
-    ReportWarning(script, unresolved_factory_class.token_index(),
-                  "class '%s' in default clause of interface '%s' is "
-                  "missing its type parameter list.\n",
-                  factory_name.ToCString(),
-                  interface_name.ToCString());
-    return;
+  const intptr_t num_default_type_params =
+      factory_signature_class.NumTypeParameters();
+  // If a type parameter list is included in the default factory clause (it
+  // can be omitted), verify that it matches the list of type parameters of
+  // the factory class in number, names, and bounds.
+  if (num_default_type_params > 0) {
+    ResolveAndFinalizeUpperBounds(factory_signature_class);
+    String& expected_type_name = String::Handle();
+    String& actual_type_name = String::Handle();
+    AbstractType& expected_type_extends = AbstractType::Handle();
+    AbstractType& actual_type_extends = AbstractType::Handle();
+    const Array& expected_type_names =
+        Array::Handle(factory_signature_class.type_parameters());
+    const Array& actual_type_names =
+        Array::Handle(factory_class.type_parameters());
+    const TypeArguments& expected_extends_array =
+        TypeArguments::Handle(factory_signature_class.type_parameter_extends());
+    const TypeArguments& actual_extends_array =
+        TypeArguments::Handle(factory_class.type_parameter_extends());
+    bool mismatch = num_factory_type_params != num_default_type_params;
+    for (intptr_t i = 0; !mismatch && (i < num_default_type_params); i++) {
+      expected_type_name ^= expected_type_names.At(i);
+      actual_type_name ^= actual_type_names.At(i);
+      expected_type_extends = expected_extends_array.TypeAt(i);
+      actual_type_extends = actual_extends_array.TypeAt(i);
+      if (!expected_type_name.Equals(actual_type_name) ||
+          !expected_type_extends.Equals(actual_type_extends)) {
+        mismatch = true;
+      }
+    }
+    if (mismatch) {
+      const String& interface_name = String::Handle(interface.Name());
+      const String& factory_name = String::Handle(factory_class.Name());
+      const Script& script = Script::Handle(interface.script());
+      ReportError(script, unresolved_factory_class.token_index(),
+                  "mismatch in number, names, or bounds of type parameters "
+                  "between default clause of interface '%s' and actual factory "
+                  "class '%s'.\n",
+                  interface_name.ToCString(),
+                  factory_name.ToCString());
+    }
   }
-  String& expected_type_name = String::Handle();
-  String& actual_type_name = String::Handle();
-  AbstractType& expected_type_extends = AbstractType::Handle();
-  AbstractType& actual_type_extends = AbstractType::Handle();
-  const Array& expected_type_names =
-      Array::Handle(factory_signature_class.type_parameters());
-  const Array& actual_type_names =
+  // Verify that the type parameters of the factory class and of the interface
+  // have identical names.
+  String& interface_type_param_name = String::Handle();
+  String& factory_type_param_name = String::Handle();
+  const Array& interface_type_param_names =
+      Array::Handle(interface.type_parameters());
+  const Array& factory_type_param_names =
       Array::Handle(factory_class.type_parameters());
-  const TypeArguments& expected_extends_array =
-      TypeArguments::Handle(factory_signature_class.type_parameter_extends());
-  const TypeArguments& actual_extends_array =
-      TypeArguments::Handle(factory_class.type_parameter_extends());
-  for (intptr_t i = 0; !mismatch && (i < num_type_params); i++) {
-    expected_type_name ^= expected_type_names.At(i);
-    actual_type_name ^= actual_type_names.At(i);
-    expected_type_extends = expected_extends_array.TypeAt(i);
-    actual_type_extends = actual_extends_array.TypeAt(i);
-    if (!expected_type_name.Equals(actual_type_name) ||
-        !expected_type_extends.Equals(actual_type_extends)) {
+  const intptr_t num_interface_type_params = interface.NumTypeParameters();
+  bool mismatch = num_interface_type_params != num_factory_type_params;
+  for (intptr_t i = 0; !mismatch && (i < num_factory_type_params); i++) {
+    interface_type_param_name ^= interface_type_param_names.At(i);
+    factory_type_param_name ^= factory_type_param_names.At(i);
+    if (!interface_type_param_name.Equals(factory_type_param_name)) {
       mismatch = true;
     }
   }
@@ -424,9 +440,8 @@ void ClassFinalizer::ResolveDefaultClass(const Class& interface) {
     const String& factory_name = String::Handle(factory_class.Name());
     const Script& script = Script::Handle(interface.script());
     ReportError(script, unresolved_factory_class.token_index(),
-                "mismatch in number, names, or bounds of type parameters "
-                "between default clause of interface '%s' and actual factory "
-                "class '%s'.\n",
+                "mismatch in number or names of type parameters between "
+                "interface '%s' and default factory class '%s'.\n",
                 interface_name.ToCString(),
                 factory_name.ToCString());
   }
@@ -725,45 +740,7 @@ void ClassFinalizer::ResolveAndFinalizeSignature(const Class& cls,
                                                  const Function& function) {
   // Resolve result type.
   AbstractType& type = AbstractType::Handle(function.result_type());
-  if (!type.IsResolved()) {
-    if (function.IsFactory()) {
-      // TODO(regis): Factory functions should not declare type parameters
-      // anymore. Remove this code once all libraries are fixed.
-
-      // The signature class of the factory for a generic class used to hold the
-      // type parameters and their upper bounds. Copy the signature class from
-      // the result before it gets resolved.
-      const UnresolvedClass& unresolved_type_class =
-          UnresolvedClass::Handle(type.unresolved_class());
-      const Class& factory_signature_class =
-          Class::Handle(unresolved_type_class.factory_signature_class());
-
-      if (!factory_signature_class.IsNull()) {
-        // TODO(regis): Remove support for obsolete syntax in the parser.
-        ASSERT(factory_signature_class.NumTypeParameters() > 0);
-        function.set_signature_class(factory_signature_class);
-        ResolveType(cls, type);
-        const Class& type_class = Class::Handle(type.type_class());
-        // Verify that the factory signature declares the same number of type
-        // parameters as the return type class or interface.
-        ResolveAndFinalizeUpperBounds(factory_signature_class);
-        if (factory_signature_class.NumTypeParameters() !=
-            type_class.NumTypeParameters()) {
-          const String& function_name = String::Handle(function.name());
-          const Class& enclosing_class = Class::Handle(function.owner());
-          const Script& script = Script::Handle(enclosing_class.script());
-          ReportError(script, unresolved_type_class.token_index(),
-                      "factory method '%s' declares wrong number of type "
-                      "parameters (obsolete syntax).\n",
-                      function_name.ToCString());
-        }
-      } else {
-        ResolveType(cls, type);
-      }
-    } else {
-      ResolveType(cls, type);
-    }
-  }
+  ResolveType(cls, type);
   type = FinalizeType(cls, type);
   function.set_result_type(type);
   // Resolve formal parameter types.

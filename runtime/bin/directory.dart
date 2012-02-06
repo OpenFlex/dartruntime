@@ -1,7 +1,10 @@
-// Copyright (c) 2011, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
+/**
+ * [Directory] objects are used for working with directories.
+ */
 interface Directory default _Directory {
   /**
    * Creates a directory object. The path is either a full path or
@@ -79,14 +82,24 @@ interface Directory default _Directory {
    * Deletes the directory with this name. If the operation completes
    * successfully the [deleteHandler] is called. Otherwise the
    * [errorHandler] is called.
+   *
+   * If [recursive] is [:true:] this directory and all sub-directories
+   * and files in the directory are deleted. If [recursive] is
+   * [:false:] only this directory (which must be empty) is
+   * deleted. [recursive] is [:false:] by default.
    */
-  void delete();
+  void delete([bool recursive]);
 
   /**
    * Deletes the directory with this name. Throws an exception
-   * if the directory is not empty or if deletion failed.
+   * if the directory cannot be deleted.
+   *
+   * If [recursive] is [:true:] this directory and all sub-directories
+   * and files in the directory are deleted. If [recursive] is
+   * [:false:] only this directory (which must be empty) is
+   * deleted. [recursive] is [:false:] by default.
    */
-  void deleteSync();
+  void deleteSync([bool recursive]);
 
   /**
    * List the sub-directories and files of this
@@ -149,7 +162,7 @@ interface Directory default _Directory {
    * Set the handler that is called when a temporary directory is
    * successfully created.
    */
-  void set createTempHandler(void doneHandler(bool completed));
+  void set createTempHandler(void createTempHandler());
 
   /**
    * Set the handler that is called when a directory is successfully

@@ -23,6 +23,7 @@ class Breakpoint {
 
   RawFunction* function() const { return function_; }
   uword pc() const { return pc_; }
+  intptr_t token_index() const { return token_index_; }
 
   RawScript* SourceCode();
   RawString* SourceUrl();
@@ -33,11 +34,13 @@ class Breakpoint {
 
   void set_next(Breakpoint* value) { next_ = value; }
   Breakpoint* next() const { return this->next_; }
+  intptr_t pc_desc_index() const { return pc_desc_index_; }
 
   RawFunction* function_;
   intptr_t pc_desc_index_;
   intptr_t token_index_;
   uword pc_;
+  uword saved_bytes_;
   intptr_t line_number_;
   Breakpoint* next_;
 
@@ -71,8 +74,10 @@ class ActivationFrame : public ZoneAllocated {
                   intptr_t* end_pos,
                   Instance* value);
 
+  RawArray* GetLocalVariables();
+
  private:
-  void GetLocalVariables();
+  void GetDescIndices();
   RawInstance* GetLocalVarValue(intptr_t slot_index);
 
   uword pc_;
@@ -114,8 +119,10 @@ typedef void BreakpointHandler(Breakpoint* bpt, StackTrace* stack);
 class Debugger {
  public:
   Debugger();
+  ~Debugger();
 
   void Initialize(Isolate* isolate);
+  void Shutdown();
   bool IsActive();
 
   void SetBreakpointHandler(BreakpointHandler* handler);
@@ -125,9 +132,13 @@ class Debugger {
                                const String& function_name);
 
   // Set breakpoint at closest location to function entry.
-  Breakpoint* SetBreakpointAtEntry(const Function& target_function);
+  Breakpoint* SetBreakpointAtEntry(const Function& target_function,
+                                   Error* error);
   Breakpoint* SetBreakpointAtLine(const String& script_url,
-                                  intptr_t line_number);
+                                  intptr_t line_number,
+                                  Error* error);
+
+  void RemoveBreakpoint(Breakpoint* bpt);
 
   void VisitObjectPointers(ObjectPointerVisitor* visitor);
 
@@ -137,14 +148,29 @@ class Debugger {
   // Called from Runtime when a breakpoint in Dart code is reached.
   void BreakpointCallback();
 
+  RawArray* GetInstanceFields(const Instance& obj);
+  RawArray* GetStaticFields(const Class& cls);
+
   // Utility functions.
   static const char* QualifiedFunctionName(const Function& func);
 
+  RawObject* GetInstanceField(const Class& cls,
+                              const String& field_name,
+                              const Instance& object);
+  RawObject* GetStaticField(const Class& cls,
+                            const String& field_name);
+
  private:
   Breakpoint* SetBreakpoint(const Function& target_function,
-                            intptr_t token_index);
-  void AddBreakpoint(Breakpoint* bpt);
+                            intptr_t token_index,
+                            Error* error);
+  void UnsetBreakpoint(Breakpoint* bpt);
+  Breakpoint* NewBreakpoint(const Function& func, intptr_t pc_desc_index);
+  void RegisterBreakpoint(Breakpoint* bpt);
+  Breakpoint* GetBreakpointByFunction(const Function& func,
+                                      intptr_t token_index);
 
+  Isolate* isolate_;
   bool initialized_;
   BreakpointHandler* bp_handler_;
   Breakpoint* breakpoints_;

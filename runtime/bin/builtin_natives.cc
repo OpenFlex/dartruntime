@@ -28,7 +28,7 @@
   V(Directory_Exists, 1)                                                       \
   V(Directory_Create, 1)                                                       \
   V(Directory_CreateTemp, 2)                                                   \
-  V(Directory_Delete, 1)                                                       \
+  V(Directory_Delete, 2)                                                       \
   V(EventHandler_Start, 1)                                                     \
   V(EventHandler_SendData, 4)                                                  \
   V(Exit, 1)                                                                   \
@@ -54,7 +54,6 @@
   V(Platform_PathSeparator, 0)                                                 \
   V(Process_Start, 9)                                                          \
   V(Process_Kill, 2)                                                           \
-  V(Process_Exit, 2)                                                           \
   V(ServerSocket_CreateBindListen, 4)                                          \
   V(ServerSocket_Accept, 2)                                                    \
   V(Socket_CreateConnect, 3)                                                   \
@@ -127,8 +126,14 @@ void FUNCTION_NAME(Exit)(Dart_NativeArguments args) {
 }
 
 
-void Builtin::SetNativeResolver() {
-  Dart_Handle url = Dart_NewString(DartUtils::kBuiltinLibURL);
+void Builtin::SetNativeResolver(Builtin::BuiltinLibraryId id) {
+  Dart_Handle url;
+  if (id == Builtin::kBuiltinLibrary) {
+    url = Dart_NewString(DartUtils::kBuiltinLibURL);
+  } else {
+    ASSERT(id == Builtin::kIOLibrary);
+    url = Dart_NewString(DartUtils::kIOLibURL);
+  }
   Dart_Handle builtin_lib = Dart_LookupLibrary(url);
   DART_CHECK_VALID(builtin_lib);
   // Setup the native resolver for built in library functions.

@@ -310,7 +310,7 @@ CLASS_LIST_NO_OBJECT(DEFINE_CLASS_TESTER);
                             const Script& script,
                             const Library& lib);
 
-  static void Init(Isolate* isolate);
+  static RawError* Init(Isolate* isolate);
   static void InitFromSnapshot(Isolate* isolate);
   static void InitOnce();
 
@@ -601,6 +601,8 @@ class Class : public Object {
   RawFunction* LookupConstructor(const String& name) const;
   RawFunction* LookupFactory(const String& name) const;
   RawFunction* LookupFunction(const String& name) const;
+  RawFunction* LookupGetterFunction(const String& name) const;
+  RawFunction* LookupSetterFunction(const String& name) const;
   RawFunction* LookupFunctionAtToken(intptr_t token_index) const;
   RawField* LookupInstanceField(const String& name) const;
   RawField* LookupStaticField(const String& name) const;
@@ -704,6 +706,10 @@ class Class : public Object {
   // Assigns empty array to all raw class array fields.
   void InitEmptyFields();
 
+  RawFunction* LookupAccessorFunction(const char* prefix,
+                                      intptr_t prefix_length,
+                                      const String& name) const;
+
   HEAP_OBJECT_IMPLEMENTATION(Class, Object);
   friend class Object;
   friend class Instance;
@@ -715,7 +721,9 @@ class Class : public Object {
 // to a class after all classes have been loaded and finalized.
 class UnresolvedClass : public Object {
  public:
-  RawString* qualifier() const { return raw_ptr()->qualifier_; }
+  RawLibraryPrefix* library_prefix() const {
+    return raw_ptr()->library_prefix_;
+  }
   RawString* ident() const { return raw_ptr()->ident_; }
   intptr_t token_index() const { return raw_ptr()->token_index_; }
 
@@ -730,13 +738,13 @@ class UnresolvedClass : public Object {
     return RoundedAllocationSize(sizeof(RawUnresolvedClass));
   }
   static RawUnresolvedClass* New(intptr_t token_index,
-                                 const String& qualifier,
+                                 const LibraryPrefix& library_prefix,
                                  const String& ident);
 
  private:
   void set_token_index(intptr_t token_index) const;
   void set_ident(const String& ident) const;
-  void set_qualifier(const String& qualifier) const;
+  void set_library_prefix(const LibraryPrefix& library_prefix) const;
 
   static RawUnresolvedClass* New();
 
@@ -926,9 +934,6 @@ class Type : public AbstractType {
 
   // The finalized type of the given non-parameterized class.
   static RawType* NewNonParameterizedType(const Class& type_class);
-
-  static RawType* NewParameterizedType(
-      const Object& type_class, const AbstractTypeArguments& arguments);
 
   static RawType* New(const Object& clazz,
                       const AbstractTypeArguments& arguments);
@@ -1503,7 +1508,9 @@ class Field : public Object {
 
   // Constructs getter and setter names for fields and vice versa.
   static RawString* GetterName(const String& field_name);
+  static RawString* GetterSymbol(const String& field_name);
   static RawString* SetterName(const String& field_name);
+  static RawString* SetterSymbol(const String& field_name);
   static RawString* NameFromGetter(const String& getter_name);
   static RawString* NameFromSetter(const String& setter_name);
 
@@ -1684,6 +1691,7 @@ class Library : public Object {
   RawObject* LookupLocalObject(const String& name) const;
   RawClass* LookupLocalClass(const String& name) const;
   RawScript* LookupScript(const String& url) const;
+  RawArray* LoadedScripts() const;
 
   void AddAnonymousClass(const Class& cls) const;
 
@@ -1704,6 +1712,8 @@ class Library : public Object {
     raw_ptr()->native_entry_resolver_ = value;
   }
 
+  RawString* PrivateName(const char* name);
+
   void Register() const;
 
   RawLibrary* next_registered() const { return raw_ptr()->next_registered_; }
@@ -1719,7 +1729,7 @@ class Library : public Object {
   static RawLibrary* NativeWrappersLibrary();
 
   // Eagerly compile all classes and functions in the library.
-  static void CompileAll();
+  static RawError* CompileAll();
 
  private:
   static const int kInitialImportsCapacity = 4;
@@ -1738,6 +1748,7 @@ class Library : public Object {
   }
   RawArray* imports() const { return raw_ptr()->imports_; }
   RawArray* imported_into() const { return raw_ptr()->imported_into_; }
+  RawArray* loaded_scripts() const { return raw_ptr()->loaded_scripts_; }
   RawArray* dictionary() const { return raw_ptr()->dictionary_; }
   void InitClassDictionary() const;
   void InitImportList() const;
@@ -3234,11 +3245,47 @@ class ImmutableArray : public Array {
 };
 
 
-class ByteBuffer : public Instance {
+class ByteArray : public Instance {
+ public:
+  virtual intptr_t Length() const;
+
+  static void Copy(uint8_t* dst,
+                   const ByteArray& src,
+                   intptr_t src_offset,
+                   intptr_t length);
+
+  static void Copy(const ByteArray& dst,
+                   intptr_t dst_offset,
+                   const uint8_t* src,
+                   intptr_t length);
+
+  static void Copy(const ByteArray& dst,
+                   intptr_t dst_offset,
+                   const ByteArray& src,
+                   intptr_t src_offset,
+                   intptr_t length);
+
+ private:
+  virtual uint8_t* ByteAddr(intptr_t byte_offset) const;
+
+  HEAP_OBJECT_IMPLEMENTATION(ByteArray, Instance);
+  friend class Class;
+};
+
+
+class InternalByteArray : public ByteArray {
  public:
   intptr_t Length() const {
     ASSERT(!IsNull());
     return Smi::Value(raw_ptr()->length_);
+  }
+
+  static intptr_t length_offset() {
+    return OFFSET_OF(RawInternalByteArray, length_);
+  }
+
+  static intptr_t data_offset() {
+    return length_offset() + kWordSize;
   }
 
   template<typename T>
@@ -3247,6 +3294,7 @@ class ByteBuffer : public Instance {
     ASSERT(Utils::IsAligned(reinterpret_cast<intptr_t>(addr), sizeof(T)));
     return *addr;
   }
+
   template<typename T>
   void SetAt(intptr_t byte_offset, T value) const {
     T* addr = Addr<T>(byte_offset);
@@ -3260,22 +3308,97 @@ class ByteBuffer : public Instance {
     memmove(&result, Addr<T>(byte_offset), sizeof(T));
     return result;
   }
+
   template<typename T>
   void SetUnalignedAt(intptr_t byte_offset, T value) const {
     memmove(Addr<T>(byte_offset), &value, sizeof(T));
   }
 
-  virtual bool Equals(const Instance& other) const;
-
   static intptr_t InstanceSize() {
-    return RoundedAllocationSize(sizeof(RawByteBuffer));
+    ASSERT(sizeof(RawInternalByteArray) ==
+           OFFSET_OF_RETURNED_VALUE(RawInternalByteArray, data));
+    return 0;
   }
 
-  static RawByteBuffer* New(uint8_t* data,
-                            intptr_t len,
-                            Heap::Space space = Heap::kNew);
+  static intptr_t InstanceSize(intptr_t len) {
+    return RoundedAllocationSize(sizeof(RawInternalByteArray) + len);
+  }
+
+  static RawInternalByteArray* New(intptr_t len,
+                                   Heap::Space space = Heap::kNew);
+  static RawInternalByteArray* New(const uint8_t* data,
+                                   intptr_t len,
+                                   Heap::Space space = Heap::kNew);
 
  private:
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    return Addr<uint8_t>(byte_offset);
+  }
+
+  template<typename T>
+  T* Addr(intptr_t byte_offset) const {
+    intptr_t limit = byte_offset + sizeof(T);
+    // TODO(iposva): Determine if we should throw an exception here.
+    ASSERT((byte_offset >= 0) && (limit <= Length()));
+    uint8_t* addr = &raw_ptr()->data()[byte_offset];
+    return reinterpret_cast<T*>(addr);
+  }
+
+  void SetLength(intptr_t value) {
+    raw_ptr()->length_ = Smi::New(value);
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(InternalByteArray, ByteArray);
+  friend class Class;
+};
+
+
+class ExternalByteArray : public ByteArray {
+ public:
+  intptr_t Length() const {
+    ASSERT(!IsNull());
+    return Smi::Value(raw_ptr()->length_);
+  }
+
+  template<typename T>
+  T At(intptr_t byte_offset) const {
+    T* addr = Addr<T>(byte_offset);
+    ASSERT(Utils::IsAligned(reinterpret_cast<intptr_t>(addr), sizeof(T)));
+    return *addr;
+  }
+
+  template<typename T>
+  void SetAt(intptr_t byte_offset, T value) const {
+    T* addr = Addr<T>(byte_offset);
+    ASSERT(Utils::IsAligned(reinterpret_cast<intptr_t>(addr), sizeof(T)));
+    *addr = value;
+  }
+
+  template<typename T>
+  T UnalignedAt(intptr_t byte_offset) const {
+    T result;
+    memmove(&result, Addr<T>(byte_offset), sizeof(T));
+    return result;
+  }
+
+  template<typename T>
+  void SetUnalignedAt(intptr_t byte_offset, T value) const {
+    memmove(Addr<T>(byte_offset), &value, sizeof(T));
+  }
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawExternalByteArray));
+  }
+
+  static RawExternalByteArray* New(uint8_t* data,
+                                   intptr_t len,
+                                   Heap::Space space = Heap::kNew);
+
+ private:
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    return Addr<uint8_t>(byte_offset);
+  }
+
   template<typename T>
   T* Addr(intptr_t byte_offset) const {
     intptr_t limit = byte_offset + sizeof(T);
@@ -3293,7 +3416,7 @@ class ByteBuffer : public Instance {
     raw_ptr()->data_ = data;
   }
 
-  HEAP_OBJECT_IMPLEMENTATION(ByteBuffer, Instance);
+  HEAP_OBJECT_IMPLEMENTATION(ExternalByteArray, ByteArray);
   friend class Class;
 };
 

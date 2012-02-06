@@ -8,7 +8,7 @@
 #include "vm/dart_api_state.h"
 #include "vm/debugger.h"
 #include "vm/isolate.h"
-#include "vm/longjump.h"
+#include "vm/object_store.h"
 
 namespace dart {
 
@@ -107,6 +107,16 @@ DART_EXPORT Dart_Handle Dart_ActivationFrameInfo(
 }
 
 
+DART_EXPORT Dart_Handle Dart_GetLocalVariables(
+                            Dart_ActivationFrame activation_frame) {
+  Isolate* isolate = Isolate::Current();
+  DARTSCOPE(isolate);
+  CHECK_AND_CAST(ActivationFrame, frame, activation_frame);
+  const Array& variables = Array::Handle(frame->GetLocalVariables());
+  return Api::NewLocalHandle(variables);
+}
+
+
 DART_EXPORT Dart_Handle Dart_SetBreakpointAtLine(
                             Dart_Handle script_url_in,
                             Dart_Handle line_number_in,
@@ -130,25 +140,23 @@ DART_EXPORT Dart_Handle Dart_SetBreakpointAtLine(
     return Api::NewError(msg);
   }
 
-  LongJump* base = isolate->long_jump_base();
-  LongJump jump;
-  isolate->set_long_jump_base(&jump);
   Dart_Handle result = Api::True();
   *breakpoint = NULL;
   Debugger* debugger = isolate->debugger();
   ASSERT(debugger != NULL);
-  if (setjmp(*jump.Set()) == 0) {
-    Breakpoint* bpt = debugger->SetBreakpointAtLine(script_url, line);
-    if (bpt == NULL) {
+  Error& error = Error::Handle();
+  Breakpoint* bpt = debugger->SetBreakpointAtLine(script_url, line, &error);
+  if (bpt == NULL) {
+    if (!error.IsNull()) {
+      // If SetBreakpointAtLine provided an error message, use it.
+      result =  Api::NewLocalHandle(error);
+    } else {
       result = Api::NewError("%s: could not set breakpoint at line %d of '%s'",
                              CURRENT_FUNC, line, script_url.ToCString());
-    } else {
-      *breakpoint = reinterpret_cast<Dart_Breakpoint>(bpt);
     }
   } else {
-    SetupErrorResult(&result);
+    *breakpoint = reinterpret_cast<Dart_Breakpoint>(bpt);
   }
-  isolate->set_long_jump_base(base);
   return result;
 }
 
@@ -187,26 +195,157 @@ DART_EXPORT Dart_Handle Dart_SetBreakpointAtEntry(
                          function_name.ToCString());
   }
 
-  LongJump* base = isolate->long_jump_base();
-  LongJump jump;
-  isolate->set_long_jump_base(&jump);
   Dart_Handle result = Api::True();
   *breakpoint = NULL;
-  if (setjmp(*jump.Set()) == 0) {
-    Breakpoint* bpt = debugger->SetBreakpointAtEntry(bp_target);
-    if (bpt == NULL) {
-      const char* target_name = Debugger::QualifiedFunctionName(bp_target);
-      result = Api::NewError("%s: no breakpoint location found in '%s'",
-                             CURRENT_FUNC, target_name);
-    } else {
-      *breakpoint = reinterpret_cast<Dart_Breakpoint>(bpt);
-    }
-  } else {
-    SetupErrorResult(&result);
+
+  Error& error = Error::Handle();
+  Breakpoint* bpt = debugger->SetBreakpointAtEntry(bp_target, &error);
+  if (!error.IsNull()) {
+    return Api::NewLocalHandle(error);
   }
-  isolate->set_long_jump_base(base);
+  if (bpt == NULL) {
+    const char* target_name = Debugger::QualifiedFunctionName(bp_target);
+    result = Api::NewError("%s: no breakpoint location found in '%s'",
+                             CURRENT_FUNC, target_name);
+  } else {
+    *breakpoint = reinterpret_cast<Dart_Breakpoint>(bpt);
+  }
   return result;
 }
 
+
+DART_EXPORT Dart_Handle Dart_DeleteBreakpoint(
+                            Dart_Breakpoint breakpoint_in) {
+  Isolate* isolate = Isolate::Current();
+  DARTSCOPE(isolate);
+
+  CHECK_AND_CAST(Breakpoint, breakpoint, breakpoint_in);
+  isolate->debugger()->RemoveBreakpoint(breakpoint);
+  return Api::True();
+}
+
+
+DART_EXPORT Dart_Handle Dart_GetInstanceFields(Dart_Handle object_in) {
+  Isolate* isolate = Isolate::Current();
+  DARTSCOPE(isolate);
+  Instance& obj = Instance::Handle();
+  UNWRAP_AND_CHECK_PARAM(Instance, obj, object_in);
+  Array& fields = Array::Handle();
+  fields = isolate->debugger()->GetInstanceFields(obj);
+  return Api::NewLocalHandle(fields);
+}
+
+
+DART_EXPORT Dart_Handle Dart_GetStaticFields(Dart_Handle cls_in) {
+  Isolate* isolate = Isolate::Current();
+  DARTSCOPE(isolate);
+  Class& cls = Class::Handle();
+  UNWRAP_AND_CHECK_PARAM(Class, cls, cls_in);
+  Array& fields = Array::Handle();
+  fields = isolate->debugger()->GetStaticFields(cls);
+  return Api::NewLocalHandle(fields);
+}
+
+
+DART_EXPORT Dart_Handle Dart_GetObjClass(Dart_Handle object_in) {
+  Isolate* isolate = Isolate::Current();
+  DARTSCOPE(isolate);
+  Instance& obj = Instance::Handle();
+  UNWRAP_AND_CHECK_PARAM(Instance, obj, object_in);
+  const Class& cls = Class::Handle(obj.clazz());
+  return Api::NewLocalHandle(cls);
+}
+
+
+DART_EXPORT Dart_Handle Dart_GetSuperclass(Dart_Handle cls_in) {
+  Isolate* isolate = Isolate::Current();
+  DARTSCOPE(isolate);
+  Class& cls = Class::Handle();
+  UNWRAP_AND_CHECK_PARAM(Class, cls, cls_in);
+  cls = cls.SuperClass();
+  return Api::NewLocalHandle(cls);
+}
+
+
+DART_EXPORT Dart_Handle Dart_GetScriptSource(
+                            Dart_Handle library_url_in,
+                            Dart_Handle script_url_in) {
+  Isolate* isolate = Isolate::Current();
+  DARTSCOPE(isolate);
+  String& library_url = String::Handle();
+  UNWRAP_AND_CHECK_PARAM(String, library_url, library_url_in);
+  String& script_url = String::Handle();
+  UNWRAP_AND_CHECK_PARAM(String, script_url, script_url_in);
+
+  const Library& library = Library::Handle(Library::LookupLibrary(library_url));
+  if (library.IsNull()) {
+    return Api::NewError("%s: library '%s' not found",
+                         CURRENT_FUNC, library_url.ToCString());
+  }
+
+  const Script& script = Script::Handle(library.LookupScript(script_url));
+  if (script.IsNull()) {
+    return Api::NewError("%s: script '%s' not found in library '%s'",
+                         CURRENT_FUNC, script_url.ToCString(),
+                         library_url.ToCString());
+  }
+
+  const String& source = String::Handle(script.source());
+  return Api::NewLocalHandle(source);
+}
+
+
+DART_EXPORT Dart_Handle Dart_GetScriptURLs(Dart_Handle library_url_in) {
+  Isolate* isolate = Isolate::Current();
+  DARTSCOPE(isolate);
+  String& library_url = String::Handle();
+  UNWRAP_AND_CHECK_PARAM(String, library_url, library_url_in);
+
+  const Library& library = Library::Handle(Library::LookupLibrary(library_url));
+  if (library.IsNull()) {
+    return Api::NewError("%s: library '%s' not found",
+                         CURRENT_FUNC, library_url.ToCString());
+  }
+  const Array& loaded_scripts = Array::Handle(library.LoadedScripts());
+  ASSERT(!loaded_scripts.IsNull());
+  intptr_t num_scripts = loaded_scripts.Length();
+  const Array& script_list = Array::Handle(Array::New(num_scripts));
+  Script& script = Script::Handle();
+  String& url = String::Handle();
+  for (int i = 0; i < num_scripts; i++) {
+    script ^= loaded_scripts.At(i);
+    url = script.url();
+    script_list.SetAt(i, url);
+  }
+  return Api::NewLocalHandle(script_list);
+}
+
+
+DART_EXPORT Dart_Handle Dart_GetLibraryURLs() {
+  Isolate* isolate = Isolate::Current();
+  ASSERT(isolate != NULL);
+  DARTSCOPE(isolate);
+
+  // Find out how many libraries are loaded in this isolate.
+  int num_libs = 0;
+  Library &lib = Library::Handle();
+  lib = isolate->object_store()->registered_libraries();
+  while (!lib.IsNull()) {
+    num_libs++;
+    lib = lib.next_registered();
+  }
+
+  // Create new list and populate with the url of loaded libraries.
+  const Array& library_list = Array::Handle(Array::New(num_libs));
+  lib = isolate->object_store()->registered_libraries();
+  String& lib_url = String::Handle();
+  for (int i = 0; i < num_libs; i++) {
+    ASSERT(!lib.IsNull());
+    lib_url = lib.url();
+    library_list.SetAt(i, lib_url);
+    lib = lib.next_registered();
+  }
+  return Api::NewLocalHandle(library_list);
+}
 
 }  // namespace dart
