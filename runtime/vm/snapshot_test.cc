@@ -7,6 +7,7 @@
 #include "vm/bigint_operations.h"
 #include "vm/class_finalizer.h"
 #include "vm/dart_api_impl.h"
+#include "vm/dart_api_message.h"
 #include "vm/dart_api_state.h"
 #include "vm/snapshot.h"
 #include "vm/unit_test.h"
@@ -52,13 +53,82 @@ static uint8_t* zone_allocator(
 }
 
 
-static Dart_CMessage* DecodeMessage(uint8_t* message,
-                                    intptr_t length,
-                                    ReAlloc allocator) {
-  CMessageReader message_reader(message, length, allocator);
+static Dart_CObject* DecodeMessage(uint8_t* message,
+                                   intptr_t length,
+                                   ReAlloc allocator) {
+  ApiMessageReader message_reader(message, length, allocator);
   return message_reader.ReadMessage();
 }
 
+
+// Compare two Dart_CObject object graphs rooted in first and
+// second. The second graph will be destroyed by this operation no matter
+// whether the graphs are equal or not.
+static void CompareDartCObjects(Dart_CObject* first, Dart_CObject* second) {
+  // Return immediately if entering a cycle.
+  if (second->type == Dart_CObject::kNumberOfTypes) return;
+
+  EXPECT_NE(first, second);
+  EXPECT_EQ(first->type, second->type);
+  switch (first->type) {
+    case Dart_CObject::kNull:
+      // Nothing more to compare.
+      break;
+    case Dart_CObject::kBool:
+      EXPECT_EQ(first->value.as_bool, second->value.as_bool);
+      break;
+    case Dart_CObject::kInt32:
+      EXPECT_EQ(first->value.as_int32, second->value.as_int32);
+      break;
+    case Dart_CObject::kInt64:
+      EXPECT_EQ(first->value.as_int64, second->value.as_int64);
+      break;
+    case Dart_CObject::kBigint:
+      EXPECT_STREQ(first->value.as_bigint, second->value.as_bigint);
+      break;
+    case Dart_CObject::kDouble:
+      EXPECT_EQ(first->value.as_double, second->value.as_double);
+      break;
+    case Dart_CObject::kString:
+      EXPECT_STREQ(first->value.as_string, second->value.as_string);
+      break;
+    case Dart_CObject::kByteArray:
+      EXPECT_EQ(first->value.as_byte_array.length,
+                second->value.as_byte_array.length);
+      for (int i = 0; i < first->value.as_byte_array.length; i++) {
+        EXPECT_EQ(first->value.as_byte_array.values[i],
+                  second->value.as_byte_array.values[i]);
+      }
+      break;
+    case Dart_CObject::kArray:
+      // Use invalid type as a visited marker to avoid infinite
+      // recursion on graphs with cycles.
+      second->type = Dart_CObject::kNumberOfTypes;
+      EXPECT_EQ(first->value.as_array.length, second->value.as_array.length);
+      for (int i = 0; i < first->value.as_array.length; i++) {
+        CompareDartCObjects(first->value.as_array.values[i],
+                            second->value.as_array.values[i]);
+      }
+      break;
+    default:
+      EXPECT(false);
+  }
+}
+
+
+static void CheckEncodeDecodeMessage(Dart_CObject* root) {
+  // Encode and decode the message.
+  uint8_t* buffer = NULL;
+  MessageWriter writer(&buffer, &malloc_allocator);
+  writer.WriteCMessage(root);
+
+  Dart_CObject* new_root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                         writer.BytesWritten(),
+                                         &zone_allocator);
+
+  // Check that the two messages are the same.
+  CompareDartCObjects(root, new_root);
+}
 
 TEST_CASE(SerializeNull) {
   Zone zone(Isolate::Current());
@@ -79,12 +149,13 @@ TEST_CASE(SerializeNull) {
   EXPECT(Equals(null_object, serialized_object));
 
   // Read object back from the snapshot into a C structure.
-  Dart_CMessage* cmessage = DecodeMessage(buffer + Snapshot::kHeaderSize,
-                                          writer.BytesWritten(),
-                                          &zone_allocator);
-  Dart_CObject* cobject = cmessage->root;
-  EXPECT_NOTNULL(cobject);
-  EXPECT_EQ(Dart_CObject::kNull, cobject->type);
+  ApiNativeScope scope;
+  Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                     writer.BytesWritten(),
+                                     &zone_allocator);
+  EXPECT_NOTNULL(root);
+  EXPECT_EQ(Dart_CObject::kNull, root->type);
+  CheckEncodeDecodeMessage(root);
 }
 
 
@@ -107,13 +178,14 @@ TEST_CASE(SerializeSmi1) {
   EXPECT(Equals(smi, serialized_object));
 
   // Read object back from the snapshot into a C structure.
-  Dart_CMessage* cmessage = DecodeMessage(buffer + Snapshot::kHeaderSize,
-                                          writer.BytesWritten(),
-                                          &zone_allocator);
-  Dart_CObject* cobject = cmessage->root;
-  EXPECT_NOTNULL(cobject);
-  EXPECT_EQ(Dart_CObject::kInt32, cobject->type);
-  EXPECT_EQ(smi.Value(), cobject->value.as_int32);
+  ApiNativeScope scope;
+  Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                     writer.BytesWritten(),
+                                     &zone_allocator);
+  EXPECT_NOTNULL(root);
+  EXPECT_EQ(Dart_CObject::kInt32, root->type);
+  EXPECT_EQ(smi.Value(), root->value.as_int32);
+  CheckEncodeDecodeMessage(root);
 }
 
 
@@ -136,13 +208,84 @@ TEST_CASE(SerializeSmi2) {
   EXPECT(Equals(smi, serialized_object));
 
   // Read object back from the snapshot into a C structure.
-  Dart_CMessage* cmessage = DecodeMessage(buffer + Snapshot::kHeaderSize,
-                                          writer.BytesWritten(),
-                                          &zone_allocator);
-  Dart_CObject* cobject = cmessage->root;
-  EXPECT_NOTNULL(cobject);
-  EXPECT_EQ(Dart_CObject::kInt32, cobject->type);
-  EXPECT_EQ(smi.Value(), cobject->value.as_int32);
+  ApiNativeScope scope;
+  Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                     writer.BytesWritten(),
+                                     &zone_allocator);
+  EXPECT_NOTNULL(root);
+  EXPECT_EQ(Dart_CObject::kInt32, root->type);
+  EXPECT_EQ(smi.Value(), root->value.as_int32);
+  CheckEncodeDecodeMessage(root);
+}
+
+
+Dart_CObject* SerializeAndDeserializeMint(const Mint& mint) {
+  // Write snapshot with object content.
+  uint8_t* buffer;
+  SnapshotWriter writer(Snapshot::kMessage, &buffer, &zone_allocator);
+  writer.WriteObject(mint.raw());
+  writer.FinalizeBuffer();
+
+  // Create a snapshot object using the buffer.
+  const Snapshot* snapshot = Snapshot::SetupFromBuffer(buffer);
+
+  // Read object back from the snapshot.
+  SnapshotReader reader(snapshot, Isolate::Current());
+  const Object& serialized_object = Object::Handle(reader.ReadObject());
+  EXPECT(serialized_object.IsMint());
+
+  // Read object back from the snapshot into a C structure.
+  Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                     writer.BytesWritten(),
+                                     &zone_allocator);
+  EXPECT_NOTNULL(root);
+  CheckEncodeDecodeMessage(root);
+  return root;
+}
+
+
+void CheckMint(int64_t value) {
+  Zone zone(Isolate::Current());
+
+  const Mint& mint = Mint::Handle(Mint::New(value));
+  ApiNativeScope scope;
+  Dart_CObject* mint_cobject = SerializeAndDeserializeMint(mint);
+  // On 64-bit platforms mints always require 64-bits as the smi range
+  // here covers most of the 64-bit range. On 32-bit platforms the smi
+  // range covers most of the 32-bit range and values outside that
+  // range are also represented as mints.
+#if defined(ARCH_IS_64_BIT)
+  EXPECT_EQ(Dart_CObject::kInt64, mint_cobject->type);
+  EXPECT_EQ(value, mint_cobject->value.as_int64);
+#else
+  if (kMinInt32 < value && value < kMaxInt32) {
+    EXPECT_EQ(Dart_CObject::kInt32, mint_cobject->type);
+    EXPECT_EQ(value, mint_cobject->value.as_int32);
+  } else {
+    EXPECT_EQ(Dart_CObject::kInt64, mint_cobject->type);
+    EXPECT_EQ(value, mint_cobject->value.as_int64);
+  }
+#endif
+}
+
+
+TEST_CASE(SerializeMints) {
+  // Min positive mint.
+  CheckMint(Smi::kMaxValue + 1);
+  // Min positive mint + 1.
+  CheckMint(Smi::kMaxValue + 2);
+  // Max negative mint.
+  CheckMint(Smi::kMinValue - 1);
+  // Max negative mint - 1.
+  CheckMint(Smi::kMinValue - 2);
+  // Max positive mint.
+  CheckMint(kMaxInt64);
+  // Max positive mint - 1.
+  CheckMint(kMaxInt64 - 1);
+  // Min negative mint.
+  CheckMint(kMinInt64);
+  // Min negative mint + 1.
+  CheckMint(kMinInt64 + 1);
 }
 
 
@@ -165,13 +308,14 @@ TEST_CASE(SerializeDouble) {
   EXPECT(Equals(dbl, serialized_object));
 
   // Read object back from the snapshot into a C structure.
-  Dart_CMessage* cmessage = DecodeMessage(buffer + Snapshot::kHeaderSize,
-                                          writer.BytesWritten(),
-                                          &zone_allocator);
-  Dart_CObject* cobject = cmessage->root;
-  EXPECT_NOTNULL(cobject);
-  EXPECT_EQ(Dart_CObject::kDouble, cobject->type);
-  EXPECT_EQ(dbl.value(), cobject->value.as_double);
+  ApiNativeScope scope;
+  Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                     writer.BytesWritten(),
+                                     &zone_allocator);
+  EXPECT_NOTNULL(root);
+  EXPECT_EQ(Dart_CObject::kDouble, root->type);
+  EXPECT_EQ(dbl.value(), root->value.as_double);
+  CheckEncodeDecodeMessage(root);
 }
 
 
@@ -211,13 +355,14 @@ TEST_CASE(SerializeTrue) {
   Snapshot::SetupFromBuffer(buffer);
 
   // Read object back from the snapshot into a C structure.
-  Dart_CMessage* cmessage = DecodeMessage(buffer + Snapshot::kHeaderSize,
-                                          writer.BytesWritten(),
-                                          &zone_allocator);
-  Dart_CObject* cobject = cmessage->root;
-  EXPECT_NOTNULL(cobject);
-  EXPECT_EQ(Dart_CObject::kBool, cobject->type);
-  EXPECT_EQ(true, cobject->value.as_bool);
+  ApiNativeScope scope;
+  Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                     writer.BytesWritten(),
+                                     &zone_allocator);
+  EXPECT_NOTNULL(root);
+  EXPECT_EQ(Dart_CObject::kBool, root->type);
+  EXPECT_EQ(true, root->value.as_bool);
+  CheckEncodeDecodeMessage(root);
 }
 
 
@@ -235,13 +380,19 @@ TEST_CASE(SerializeFalse) {
   Snapshot::SetupFromBuffer(buffer);
 
   // Read object back from the snapshot into a C structure.
-  Dart_CMessage* cmessage = DecodeMessage(buffer + Snapshot::kHeaderSize,
-                                          writer.BytesWritten(),
-                                          &zone_allocator);
-  Dart_CObject* cobject = cmessage->root;
-  EXPECT_NOTNULL(cobject);
-  EXPECT_EQ(Dart_CObject::kBool, cobject->type);
-  EXPECT_EQ(false, cobject->value.as_bool);
+  ApiNativeScope scope;
+  Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                     writer.BytesWritten(),
+                                     &zone_allocator);
+  EXPECT_NOTNULL(root);
+  EXPECT_EQ(Dart_CObject::kBool, root->type);
+  EXPECT_EQ(false, root->value.as_bool);
+  CheckEncodeDecodeMessage(root);
+}
+
+
+static uword allocator(intptr_t size) {
+  return reinterpret_cast<uword>(malloc(size));
 }
 
 
@@ -251,7 +402,7 @@ TEST_CASE(SerializeBigint) {
   // Write snapshot with object content.
   uint8_t* buffer;
   SnapshotWriter writer(Snapshot::kMessage, &buffer, &zone_allocator);
-  const Bigint& bigint = Bigint::Handle(Bigint::New(0xfffffffffLL));
+  const Bigint& bigint = Bigint::Handle(Bigint::New(DART_INT64_C(0xfffffffff)));
   writer.WriteObject(bigint.raw());
   writer.FinalizeBuffer();
 
@@ -262,16 +413,80 @@ TEST_CASE(SerializeBigint) {
   SnapshotReader reader(snapshot, Isolate::Current());
   Bigint& obj = Bigint::Handle();
   obj ^= reader.ReadObject();
-  OS::Print("%lld", BigintOperations::ToInt64(obj));
+
   EXPECT_EQ(BigintOperations::ToInt64(bigint), BigintOperations::ToInt64(obj));
 
   // Read object back from the snapshot into a C structure.
-  Dart_CMessage* cmessage = DecodeMessage(buffer + Snapshot::kHeaderSize,
-                                          writer.BytesWritten(),
-                                          &zone_allocator);
-  Dart_CObject* cobject = cmessage->root;
+  ApiNativeScope scope;
+  Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                     writer.BytesWritten(),
+                                     &zone_allocator);
   // Bigint not supported.
-  EXPECT(cobject == NULL);
+  EXPECT_NOTNULL(root);
+  EXPECT_EQ(Dart_CObject::kBigint, root->type);
+  EXPECT_STREQ("FFFFFFFFF", root->value.as_bigint);
+  CheckEncodeDecodeMessage(root);
+}
+
+
+Dart_CObject* SerializeAndDeserializeBigint(const Bigint& bigint) {
+  // Write snapshot with object content.
+  uint8_t* buffer;
+  SnapshotWriter writer(Snapshot::kMessage, &buffer, &zone_allocator);
+  writer.WriteObject(bigint.raw());
+  writer.FinalizeBuffer();
+
+  // Create a snapshot object using the buffer.
+  const Snapshot* snapshot = Snapshot::SetupFromBuffer(buffer);
+
+  // Read object back from the snapshot.
+  SnapshotReader reader(snapshot, Isolate::Current());
+  Bigint& serialized_bigint = Bigint::Handle();
+  serialized_bigint ^= reader.ReadObject();
+  const char *str1 = BigintOperations::ToDecCString(bigint, allocator);
+  const char *str2 =
+      BigintOperations::ToDecCString(serialized_bigint, allocator);
+  EXPECT_STREQ(str1, str2);
+  free(const_cast<char*>(str1));
+  free(const_cast<char*>(str2));
+
+  // Read object back from the snapshot into a C structure.
+  ApiNativeScope scope;
+  Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                     writer.BytesWritten(),
+                                     &zone_allocator);
+  // Bigint not supported.
+  EXPECT_NOTNULL(root);
+  CheckEncodeDecodeMessage(root);
+  return root;
+}
+
+
+void CheckBigint(const char* bigint_value) {
+  Zone zone(Isolate::Current());
+
+  Bigint& bigint = Bigint::Handle();
+  bigint ^= BigintOperations::NewFromCString(bigint_value);
+  Dart_CObject* bigint_cobject = SerializeAndDeserializeBigint(bigint);
+  EXPECT_EQ(Dart_CObject::kBigint, bigint_cobject->type);
+  if (bigint_value[0] == '0') {
+    EXPECT_STREQ(bigint_value + 2, bigint_cobject->value.as_bigint);
+  } else {
+    EXPECT_EQ('-', bigint_value[0]);
+    EXPECT_EQ('-', bigint_cobject->value.as_bigint[0]);
+    EXPECT_STREQ(bigint_value + 3, bigint_cobject->value.as_bigint + 1);
+  }
+}
+
+
+TEST_CASE(SerializeBigint2) {
+  CheckBigint("0x0");
+  CheckBigint("0x1");
+  CheckBigint("-0x1");
+  CheckBigint("0x11111111111111111111");
+  CheckBigint("-0x11111111111111111111");
+  CheckBigint("0x9876543210987654321098765432109876543210");
+  CheckBigint("-0x9876543210987654321098765432109876543210");
 }
 
 
@@ -350,12 +565,13 @@ TEST_CASE(SerializeString) {
   EXPECT(str.Equals(serialized_str));
 
   // Read object back from the snapshot into a C structure.
-  Dart_CMessage* cmessage = DecodeMessage(buffer + Snapshot::kHeaderSize,
-                                          writer.BytesWritten(),
-                                          &zone_allocator);
-  Dart_CObject* cobject = cmessage->root;
-  EXPECT_EQ(Dart_CObject::kString, cobject->type);
-  EXPECT_STREQ(cstr, cobject->value.as_string);
+  ApiNativeScope scope;
+  Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                     writer.BytesWritten(),
+                                     &zone_allocator);
+  EXPECT_EQ(Dart_CObject::kString, root->type);
+  EXPECT_STREQ(cstr, root->value.as_string);
+  CheckEncodeDecodeMessage(root);
 }
 
 
@@ -385,17 +601,18 @@ TEST_CASE(SerializeArray) {
   EXPECT(array.Equals(serialized_array));
 
   // Read object back from the snapshot into a C structure.
-  Dart_CMessage* cmessage = DecodeMessage(buffer + Snapshot::kHeaderSize,
-                                          writer.BytesWritten(),
-                                          &zone_allocator);
-  Dart_CObject* cobject = cmessage->root;
-  EXPECT_EQ(Dart_CObject::kArray, cobject->type);
-  EXPECT_EQ(kArrayLength, cobject->value.as_array.length);
+  ApiNativeScope scope;
+  Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                     writer.BytesWritten(),
+                                     &zone_allocator);
+  EXPECT_EQ(Dart_CObject::kArray, root->type);
+  EXPECT_EQ(kArrayLength, root->value.as_array.length);
   for (int i = 0; i < kArrayLength; i++) {
-    Dart_CObject* element = cobject->value.as_array.values[i];
+    Dart_CObject* element = root->value.as_array.values[i];
     EXPECT_EQ(Dart_CObject::kInt32, element->type);
     EXPECT_EQ(i, element->value.as_int32);
   }
+  CheckEncodeDecodeMessage(root);
 }
 
 
@@ -420,13 +637,85 @@ TEST_CASE(SerializeEmptyArray) {
   EXPECT(array.Equals(serialized_array));
 
   // Read object back from the snapshot into a C structure.
-  Dart_CMessage* cmessage = DecodeMessage(buffer + Snapshot::kHeaderSize,
-                                          writer.BytesWritten(),
-                                          &zone_allocator);
-  Dart_CObject* cobject = cmessage->root;
-  EXPECT_EQ(Dart_CObject::kArray, cobject->type);
-  EXPECT_EQ(kArrayLength, cobject->value.as_array.length);
-  EXPECT(cobject->value.as_array.values == NULL);
+  ApiNativeScope scope;
+  Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                     writer.BytesWritten(),
+                                     &zone_allocator);
+  EXPECT_EQ(Dart_CObject::kArray, root->type);
+  EXPECT_EQ(kArrayLength, root->value.as_array.length);
+  EXPECT(root->value.as_array.values == NULL);
+  CheckEncodeDecodeMessage(root);
+}
+
+
+TEST_CASE(SerializeByteArray) {
+  Zone zone(Isolate::Current());
+
+  // Write snapshot with object content.
+  uint8_t* buffer;
+  SnapshotWriter writer(Snapshot::kMessage, &buffer, &zone_allocator);
+  const int kByteArrayLength = 256;
+  InternalByteArray& byte_array =
+      InternalByteArray::Handle(InternalByteArray::New(kByteArrayLength));
+  for (int i = 0; i < kByteArrayLength; i++) {
+    byte_array.SetAt<uint8_t>(i, i);
+  }
+  writer.WriteObject(byte_array.raw());
+  writer.FinalizeBuffer();
+
+  // Create a snapshot object using the buffer.
+  const Snapshot* snapshot = Snapshot::SetupFromBuffer(buffer);
+
+  // Read object back from the snapshot.
+  SnapshotReader reader(snapshot, Isolate::Current());
+  ByteArray& serialized_byte_array = ByteArray::Handle();
+  serialized_byte_array ^= reader.ReadObject();
+  EXPECT(serialized_byte_array.IsByteArray());
+
+  // Read object back from the snapshot into a C structure.
+  ApiNativeScope scope;
+  Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                     writer.BytesWritten(),
+                                     &zone_allocator);
+  EXPECT_EQ(Dart_CObject::kByteArray, root->type);
+  EXPECT_EQ(kByteArrayLength, root->value.as_byte_array.length);
+  for (int i = 0; i < kByteArrayLength; i++) {
+    EXPECT(root->value.as_byte_array.values[i] == i);
+  }
+  CheckEncodeDecodeMessage(root);
+}
+
+
+TEST_CASE(SerializeEmptyByteArray) {
+  Zone zone(Isolate::Current());
+
+  // Write snapshot with object content.
+  uint8_t* buffer;
+  SnapshotWriter writer(Snapshot::kMessage, &buffer, &zone_allocator);
+  const int kByteArrayLength = 0;
+  InternalByteArray& byte_array =
+      InternalByteArray::Handle(InternalByteArray::New(kByteArrayLength));
+  writer.WriteObject(byte_array.raw());
+  writer.FinalizeBuffer();
+
+  // Create a snapshot object using the buffer.
+  const Snapshot* snapshot = Snapshot::SetupFromBuffer(buffer);
+
+  // Read object back from the snapshot.
+  SnapshotReader reader(snapshot, Isolate::Current());
+  ByteArray& serialized_byte_array = ByteArray::Handle();
+  serialized_byte_array ^= reader.ReadObject();
+  EXPECT(serialized_byte_array.IsByteArray());
+
+  // Read object back from the snapshot into a C structure.
+  ApiNativeScope scope;
+  Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                     writer.BytesWritten(),
+                                     &zone_allocator);
+  EXPECT_EQ(Dart_CObject::kByteArray, root->type);
+  EXPECT_EQ(kByteArrayLength, root->value.as_byte_array.length);
+  EXPECT(root->value.as_byte_array.values == NULL);
+  CheckEncodeDecodeMessage(root);
 }
 
 
@@ -748,24 +1037,25 @@ TEST_CASE(IntArrayMessage) {
   writer.WriteMessage(len, data);
 
   // Read object back from the snapshot into a C structure.
-  Dart_CMessage* cmessage = DecodeMessage(buffer + Snapshot::kHeaderSize,
-                                          writer.BytesWritten(),
-                                          &zone_allocator);
-  Dart_CObject* cobject = cmessage->root;
-  EXPECT_EQ(Dart_CObject::kArray, cobject->type);
-  EXPECT_EQ(kArrayLength, cobject->value.as_array.length);
+  ApiNativeScope scope;
+  Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                     writer.BytesWritten(),
+                                     &zone_allocator);
+  EXPECT_EQ(Dart_CObject::kArray, root->type);
+  EXPECT_EQ(kArrayLength, root->value.as_array.length);
   for (int i = 0; i < kArrayLength; i++) {
-    Dart_CObject* element = cobject->value.as_array.values[i];
+    Dart_CObject* element = root->value.as_array.values[i];
     EXPECT_EQ(Dart_CObject::kInt32, element->type);
     EXPECT_EQ(i + 1, element->value.as_int32);
   }
+  CheckEncodeDecodeMessage(root);
 }
 
 
 // Helper function to call a top level Dart function, serialize the
 // result and deserialize the result into a Dart_CObject structure.
-static Dart_CMessage* GetDeserializedDartMessage(Dart_Handle lib,
-                                                 const char* dart_function) {
+static Dart_CObject* GetDeserializedDartMessage(Dart_Handle lib,
+                                                const char* dart_function) {
   Dart_Handle result;
   result = Dart_InvokeStatic(lib,
                              Dart_NewString(""),
@@ -782,10 +1072,9 @@ static Dart_CMessage* GetDeserializedDartMessage(Dart_Handle lib,
   writer.FinalizeBuffer();
 
   // Read object back from the snapshot into a C structure.
-  Dart_CMessage* cmessage = DecodeMessage(buffer + Snapshot::kHeaderSize,
-                                          writer.BytesWritten(),
-                                          &zone_allocator);
-  return cmessage;
+  return DecodeMessage(buffer + Snapshot::kHeaderSize,
+                       writer.BytesWritten(),
+                       &zone_allocator);
 }
 
 
@@ -793,6 +1082,9 @@ UNIT_TEST_CASE(DartGeneratedMessages) {
   static const char* kCustomIsolateScriptChars =
       "getSmi() {\n"
       "  return 42;\n"
+      "}\n"
+      "getBigint() {\n"
+      "  return -0x424242424242424242424242424242424242;\n"
       "}\n"
       "getString() {\n"
       "  return \"Hello, world!\";\n"
@@ -816,6 +1108,13 @@ UNIT_TEST_CASE(DartGeneratedMessages) {
                                  0,
                                  NULL);
   EXPECT_VALID(smi_result);
+  Dart_Handle bigint_result;
+  bigint_result = Dart_InvokeStatic(lib,
+                                    Dart_NewString(""),
+                                    Dart_NewString("getBigint"),
+                                    0,
+                                    NULL);
+  EXPECT_VALID(bigint_result);
   Dart_Handle string_result;
   string_result = Dart_InvokeStatic(lib,
                                     Dart_NewString(""),
@@ -838,13 +1137,34 @@ UNIT_TEST_CASE(DartGeneratedMessages) {
       writer.FinalizeBuffer();
 
       // Read object back from the snapshot into a C structure.
-      Dart_CMessage* cmessage = DecodeMessage(buffer + Snapshot::kHeaderSize,
-                                              writer.BytesWritten(),
-                                              &zone_allocator);
-      Dart_CObject* cobject = cmessage->root;
-      EXPECT_NOTNULL(cobject);
-      EXPECT_EQ(Dart_CObject::kInt32, cobject->type);
-      EXPECT_EQ(42, cobject->value.as_int32);
+      ApiNativeScope scope;
+      Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                         writer.BytesWritten(),
+                                         &zone_allocator);
+      EXPECT_NOTNULL(root);
+      EXPECT_EQ(Dart_CObject::kInt32, root->type);
+      EXPECT_EQ(42, root->value.as_int32);
+      CheckEncodeDecodeMessage(root);
+    }
+    {
+      Zone zone(Isolate::Current());
+      uint8_t* buffer;
+      SnapshotWriter writer(Snapshot::kMessage, &buffer, &zone_allocator);
+      Bigint& bigint = Bigint::Handle();
+      bigint ^= Api::UnwrapHandle(bigint_result);
+      writer.WriteObject(bigint.raw());
+      writer.FinalizeBuffer();
+
+      // Read object back from the snapshot into a C structure.
+      ApiNativeScope scope;
+      Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                         writer.BytesWritten(),
+                                         &zone_allocator);
+      EXPECT_NOTNULL(root);
+      EXPECT_EQ(Dart_CObject::kBigint, root->type);
+      EXPECT_STREQ("-424242424242424242424242424242424242",
+                   root->value.as_bigint);
+      CheckEncodeDecodeMessage(root);
     }
     {
       Zone zone(Isolate::Current());
@@ -856,13 +1176,14 @@ UNIT_TEST_CASE(DartGeneratedMessages) {
       writer.FinalizeBuffer();
 
       // Read object back from the snapshot into a C structure.
-      Dart_CMessage* cmessage = DecodeMessage(buffer + Snapshot::kHeaderSize,
-                                              writer.BytesWritten(),
-                                              &zone_allocator);
-      Dart_CObject* cobject = cmessage->root;
-      EXPECT_NOTNULL(cobject);
-      EXPECT_EQ(Dart_CObject::kString, cobject->type);
-      EXPECT_STREQ("Hello, world!", cobject->value.as_string);
+      ApiNativeScope scope;
+      Dart_CObject* root = DecodeMessage(buffer + Snapshot::kHeaderSize,
+                                         writer.BytesWritten(),
+                                         &zone_allocator);
+      EXPECT_NOTNULL(root);
+      EXPECT_EQ(Dart_CObject::kString, root->type);
+      EXPECT_STREQ("Hello, world!", root->value.as_string);
+      CheckEncodeDecodeMessage(root);
     }
   }
   Dart_ExitScope();
@@ -906,69 +1227,65 @@ UNIT_TEST_CASE(DartGeneratedListMessages) {
 
   {
     DARTSCOPE_NOCHECKS(isolate);
-
     {
       // Generate a list of nulls from Dart code.
-      Zone zone(Isolate::Current());
-      Dart_CMessage* cmessage = GetDeserializedDartMessage(lib, "getList");
-      Dart_CObject* value = cmessage->root;
-      EXPECT_NOTNULL(value);
-      EXPECT_EQ(Dart_CObject::kArray, value->type);
-      EXPECT_EQ(kArrayLength, value->value.as_array.length);
+      ApiNativeScope scope;
+      Dart_CObject* root = GetDeserializedDartMessage(lib, "getList");
+      EXPECT_NOTNULL(root);
+      EXPECT_EQ(Dart_CObject::kArray, root->type);
+      EXPECT_EQ(kArrayLength, root->value.as_array.length);
       for (int i = 0; i < kArrayLength; i++) {
-        EXPECT_EQ(Dart_CObject::kNull, value->value.as_array.values[i]->type);
+        EXPECT_EQ(Dart_CObject::kNull, root->value.as_array.values[i]->type);
       }
+      CheckEncodeDecodeMessage(root);
     }
     {
       // Generate a list of ints from Dart code.
-      Zone zone(Isolate::Current());
-      Dart_CMessage* cmessage = GetDeserializedDartMessage(lib, "getIntList");
-      Dart_CObject* value = cmessage->root;
-      EXPECT_NOTNULL(value);
-      EXPECT_EQ(Dart_CObject::kArray, value->type);
-      EXPECT_EQ(kArrayLength, value->value.as_array.length);
+      ApiNativeScope scope;
+      Dart_CObject* root = GetDeserializedDartMessage(lib, "getIntList");
+      EXPECT_NOTNULL(root);
+      EXPECT_EQ(Dart_CObject::kArray, root->type);
+      EXPECT_EQ(kArrayLength, root->value.as_array.length);
       for (int i = 0; i < kArrayLength; i++) {
-        EXPECT_EQ(Dart_CObject::kInt32, value->value.as_array.values[i]->type);
-        EXPECT_EQ(i, value->value.as_array.values[i]->value.as_int32);
+        EXPECT_EQ(Dart_CObject::kInt32, root->value.as_array.values[i]->type);
+        EXPECT_EQ(i, root->value.as_array.values[i]->value.as_int32);
       }
+      CheckEncodeDecodeMessage(root);
     }
     {
       // Generate a list of strings from Dart code.
-      Zone zone(Isolate::Current());
-      Dart_CMessage* cmessage =
-          GetDeserializedDartMessage(lib, "getStringList");
-      Dart_CObject* value = cmessage->root;
-      EXPECT_NOTNULL(value);
-      EXPECT_EQ(Dart_CObject::kArray, value->type);
-      EXPECT_EQ(kArrayLength, value->value.as_array.length);
+      ApiNativeScope scope;
+      Dart_CObject* root = GetDeserializedDartMessage(lib, "getStringList");
+      EXPECT_NOTNULL(root);
+      EXPECT_EQ(Dart_CObject::kArray, root->type);
+      EXPECT_EQ(kArrayLength, root->value.as_array.length);
       for (int i = 0; i < kArrayLength; i++) {
-        EXPECT_EQ(Dart_CObject::kString, value->value.as_array.values[i]->type);
+        EXPECT_EQ(Dart_CObject::kString, root->value.as_array.values[i]->type);
         char buffer[3];
         snprintf(buffer, sizeof(buffer), "%d", i);
-        EXPECT_STREQ(buffer, value->value.as_array.values[i]->value.as_string);
+        EXPECT_STREQ(buffer, root->value.as_array.values[i]->value.as_string);
       }
     }
     {
       // Generate a list of objects of different types from Dart code.
-      Zone zone(Isolate::Current());
-      Dart_CMessage* cmessage = GetDeserializedDartMessage(lib, "getMixedList");
-      Dart_CObject* value = cmessage->root;
-      EXPECT_NOTNULL(value);
-      EXPECT_EQ(Dart_CObject::kArray, value->type);
-      EXPECT_EQ(kArrayLength, value->value.as_array.length);
+      ApiNativeScope scope;
+      Dart_CObject* root = GetDeserializedDartMessage(lib, "getMixedList");
+      EXPECT_NOTNULL(root);
+      EXPECT_EQ(Dart_CObject::kArray, root->type);
+      EXPECT_EQ(kArrayLength, root->value.as_array.length);
 
-      EXPECT_EQ(Dart_CObject::kInt32, value->value.as_array.values[0]->type);
-      EXPECT_EQ(0, value->value.as_array.values[0]->value.as_int32);
-      EXPECT_EQ(Dart_CObject::kString, value->value.as_array.values[1]->type);
-      EXPECT_STREQ("1", value->value.as_array.values[1]->value.as_string);
-      EXPECT_EQ(Dart_CObject::kDouble, value->value.as_array.values[2]->type);
-      EXPECT_EQ(2.2, value->value.as_array.values[2]->value.as_double);
-      EXPECT_EQ(Dart_CObject::kBool, value->value.as_array.values[3]->type);
-      EXPECT_EQ(true, value->value.as_array.values[3]->value.as_bool);
+      EXPECT_EQ(Dart_CObject::kInt32, root->value.as_array.values[0]->type);
+      EXPECT_EQ(0, root->value.as_array.values[0]->value.as_int32);
+      EXPECT_EQ(Dart_CObject::kString, root->value.as_array.values[1]->type);
+      EXPECT_STREQ("1", root->value.as_array.values[1]->value.as_string);
+      EXPECT_EQ(Dart_CObject::kDouble, root->value.as_array.values[2]->type);
+      EXPECT_EQ(2.2, root->value.as_array.values[2]->value.as_double);
+      EXPECT_EQ(Dart_CObject::kBool, root->value.as_array.values[3]->type);
+      EXPECT_EQ(true, root->value.as_array.values[3]->value.as_bool);
 
       for (int i = 0; i < kArrayLength; i++) {
         if (i > 3) {
-          EXPECT_EQ(Dart_CObject::kNull, value->value.as_array.values[i]->type);
+          EXPECT_EQ(Dart_CObject::kNull, root->value.as_array.values[i]->type);
         }
       }
     }
@@ -992,6 +1309,12 @@ UNIT_TEST_CASE(DartGeneratedListMessagesWithBackref) {
       "  var d = 3.14;\n"
       "  var list = new List<double>(kArrayLength);\n"
       "  for (var i = 0; i < kArrayLength; i++) list[i] = d;\n"
+      "  return list;\n"
+      "}\n"
+      "getByteArrayList() {\n"
+      "  var byte_array = new ByteArray(256);\n"
+      "  var list = new List<ByteArray>(kArrayLength);\n"
+      "  for (var i = 0; i < kArrayLength; i++) list[i] = byte_array;\n"
       "  return list;\n"
       "}\n"
       "getMixedList() {\n"
@@ -1022,52 +1345,61 @@ UNIT_TEST_CASE(DartGeneratedListMessagesWithBackref) {
 
     {
       // Generate a list of strings from Dart code.
-      Zone zone(Isolate::Current());
-      Dart_CMessage* cmessage =
-          GetDeserializedDartMessage(lib, "getStringList");
-      Dart_CObject* object = cmessage->root;
-      EXPECT_NOTNULL(object);
-      EXPECT_EQ(Dart_CObject::kArray, object->type);
-      EXPECT_EQ(kArrayLength, object->value.as_array.length);
+      ApiNativeScope scope;
+      Dart_CObject* root = GetDeserializedDartMessage(lib, "getStringList");
+      EXPECT_NOTNULL(root);
+      EXPECT_EQ(Dart_CObject::kArray, root->type);
+      EXPECT_EQ(kArrayLength, root->value.as_array.length);
       for (int i = 0; i < kArrayLength; i++) {
-        Dart_CObject* element = object->value.as_array.values[i];
-        EXPECT_EQ(object->value.as_array.values[0], element);
+        Dart_CObject* element = root->value.as_array.values[i];
+        EXPECT_EQ(root->value.as_array.values[0], element);
         EXPECT_EQ(Dart_CObject::kString, element->type);
         EXPECT_STREQ("Hello, world!", element->value.as_string);
       }
     }
     {
       // Generate a list of doubles from Dart code.
-      Zone zone(Isolate::Current());
-      Dart_CMessage* cmessage =
-          GetDeserializedDartMessage(lib, "getDoubleList");
-      Dart_CObject* object = cmessage->root;
-      EXPECT_NOTNULL(object);
-      EXPECT_EQ(Dart_CObject::kArray, object->type);
-      EXPECT_EQ(kArrayLength, object->value.as_array.length);
+      ApiNativeScope scope;
+      Dart_CObject* root = GetDeserializedDartMessage(lib, "getDoubleList");
+      EXPECT_NOTNULL(root);
+      EXPECT_EQ(Dart_CObject::kArray, root->type);
+      EXPECT_EQ(kArrayLength, root->value.as_array.length);
       for (int i = 0; i < kArrayLength; i++) {
-        Dart_CObject* element = object->value.as_array.values[i];
-        EXPECT_EQ(object->value.as_array.values[0], element);
+        Dart_CObject* element = root->value.as_array.values[i];
+        EXPECT_EQ(root->value.as_array.values[0], element);
         EXPECT_EQ(Dart_CObject::kDouble, element->type);
         EXPECT_EQ(3.14, element->value.as_double);
       }
     }
     {
-      // Generate a list of objects of different types from Dart code.
-      Zone zone(Isolate::Current());
-      Dart_CMessage* cmessage = GetDeserializedDartMessage(lib, "getMixedList");
-      Dart_CObject* object = cmessage->root;
-      EXPECT_NOTNULL(object);
-      EXPECT_EQ(Dart_CObject::kArray, object->type);
-      EXPECT_EQ(kArrayLength, object->value.as_array.length);
+      // Generate a list of doubles from Dart code.
+      ApiNativeScope scope;
+      Dart_CObject* root = GetDeserializedDartMessage(lib, "getByteArrayList");
+      EXPECT_NOTNULL(root);
+      EXPECT_EQ(Dart_CObject::kArray, root->type);
+      EXPECT_EQ(kArrayLength, root->value.as_array.length);
       for (int i = 0; i < kArrayLength; i++) {
-        Dart_CObject* element = object->value.as_array.values[i];
+        Dart_CObject* element = root->value.as_array.values[i];
+        EXPECT_EQ(root->value.as_array.values[0], element);
+        EXPECT_EQ(Dart_CObject::kByteArray, element->type);
+        EXPECT_EQ(256, element->value.as_byte_array.length);
+      }
+    }
+    {
+      // Generate a list of objects of different types from Dart code.
+      ApiNativeScope scope;
+      Dart_CObject* root = GetDeserializedDartMessage(lib, "getMixedList");
+      EXPECT_NOTNULL(root);
+      EXPECT_EQ(Dart_CObject::kArray, root->type);
+      EXPECT_EQ(kArrayLength, root->value.as_array.length);
+      for (int i = 0; i < kArrayLength; i++) {
+        Dart_CObject* element = root->value.as_array.values[i];
         if ((i % 2) == 0) {
-          EXPECT_EQ(object->value.as_array.values[0], element);
+          EXPECT_EQ(root->value.as_array.values[0], element);
           EXPECT_EQ(Dart_CObject::kString, element->type);
           EXPECT_STREQ("A", element->value.as_string);
         } else {
-          EXPECT_EQ(object->value.as_array.values[1], element);
+          EXPECT_EQ(root->value.as_array.values[1], element);
           EXPECT_EQ(Dart_CObject::kDouble, element->type);
           EXPECT_STREQ(2.72, element->value.as_double);
         }
@@ -1075,22 +1407,93 @@ UNIT_TEST_CASE(DartGeneratedListMessagesWithBackref) {
     }
     {
       // Generate a list of objects of different types from Dart code.
-      Zone zone(Isolate::Current());
-      Dart_CMessage* cmessage =
-          GetDeserializedDartMessage(lib, "getSelfRefList");
-      Dart_CObject* object = cmessage->root;
-      EXPECT_NOTNULL(object);
-      EXPECT_EQ(Dart_CObject::kArray, object->type);
-      EXPECT_EQ(kArrayLength, object->value.as_array.length);
+      ApiNativeScope scope;
+      Dart_CObject* root = GetDeserializedDartMessage(lib, "getSelfRefList");
+      EXPECT_NOTNULL(root);
+      EXPECT_EQ(Dart_CObject::kArray, root->type);
+      EXPECT_EQ(kArrayLength, root->value.as_array.length);
       for (int i = 0; i < kArrayLength; i++) {
-        Dart_CObject* element = object->value.as_array.values[i];
+        Dart_CObject* element = root->value.as_array.values[i];
         EXPECT_EQ(Dart_CObject::kArray, element->type);
-        EXPECT_EQ(object, element);
+        EXPECT_EQ(root, element);
       }
     }
   }
   Dart_ExitScope();
   Dart_ShutdownIsolate();
+}
+
+
+UNIT_TEST_CASE(PostCObject) {
+  // Create a native port for posting from C to Dart
+  TestIsolateScope __test_isolate__;
+  const char* kScriptChars =
+      "void main() {\n"
+      "  var messageCount = 0;\n"
+      "  var exception = '';\n"
+      "  var port = new ReceivePort();\n"
+      "  port.receive((message, replyTo) {\n"
+      "    exception += message.toString();\n"
+      "    messageCount++;\n"
+      "    if (messageCount == 7) throw new Exception(exception);\n"
+      "  });\n"
+      "  return port.toSendPort();\n"
+      "}\n";
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
+  Dart_EnterScope();
+
+  // xxx
+  Dart_Handle send_port = Dart_InvokeStatic(lib,
+                                            Dart_NewString(""),
+                                            Dart_NewString("main"),
+                                            0,
+                                            NULL);
+  EXPECT_VALID(send_port);
+  Dart_Handle result =
+      Dart_GetInstanceField(send_port, Dart_NewString("_id"));
+  ASSERT(!Dart_IsError(result));
+  ASSERT(Dart_IsInteger(result));
+  int64_t send_port_id;
+  Dart_Handle result2 = Dart_IntegerToInt64(result, &send_port_id);
+  ASSERT(!Dart_IsError(result2));
+
+  // Setup single object message.
+  Dart_CObject object;
+
+  object.type = Dart_CObject::kNull;
+  EXPECT(Dart_PostCObject(send_port_id, &object));
+
+  object.type = Dart_CObject::kBool;
+  object.value.as_bool = true;
+  EXPECT(Dart_PostCObject(send_port_id, &object));
+
+  object.type = Dart_CObject::kBool;
+  object.value.as_bool = false;
+  EXPECT(Dart_PostCObject(send_port_id, &object));
+
+  object.type = Dart_CObject::kInt32;
+  object.value.as_int32 = 123;
+  EXPECT(Dart_PostCObject(send_port_id, &object));
+
+  object.type = Dart_CObject::kString;
+  object.value.as_string = const_cast<char*>("456");
+  EXPECT(Dart_PostCObject(send_port_id, &object));
+
+  object.type = Dart_CObject::kDouble;
+  object.value.as_double = 3.14;
+  EXPECT(Dart_PostCObject(send_port_id, &object));
+
+  object.type = Dart_CObject::kArray;
+  object.value.as_array.length = 0;
+  EXPECT(Dart_PostCObject(send_port_id, &object));
+
+  result = Dart_RunLoop();
+  EXPECT(Dart_IsError(result));
+  EXPECT(Dart_ErrorHasException(result));
+  EXPECT_SUBSTRING("Exception: nulltruefalse1234563.14[]\n",
+                   Dart_GetError(result));
+
+  Dart_ExitScope();
 }
 
 #endif  // defined(TARGET_ARCH_IA32) || defined(TARGET_ARCH_X64).

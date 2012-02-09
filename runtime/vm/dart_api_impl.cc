@@ -1,4 +1,4 @@
-// Copyright (c) 2011, the Dart project authors.  Please see the AUTHORS file
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
@@ -27,6 +27,8 @@
 #include "vm/verifier.h"
 
 namespace dart {
+
+ThreadLocalKey Api::api_native_key_ = Thread::kUnsetThreadLocalKey;
 
 const char* CanonicalFunction(const char* func) {
   if (strncmp(func, "dart::", 6) == 0) {
@@ -234,6 +236,13 @@ uword Api::Reallocate(uword ptr, intptr_t old_size, intptr_t new_size) {
   ApiLocalScope* scope = state->top_scope();
   ASSERT(scope != NULL);
   return scope->zone().Reallocate(ptr, old_size, new_size);
+}
+
+
+void Api::InitOnce() {
+  ASSERT(api_native_key_ == Thread::kUnsetThreadLocalKey);
+  api_native_key_ = Thread::CreateThreadLocal();
+  ASSERT(api_native_key_ != Thread::kUnsetThreadLocalKey);
 }
 
 
@@ -683,6 +692,18 @@ DART_EXPORT bool Dart_PostIntArray(Dart_Port port_id,
   MessageWriter writer(&buffer, &allocator);
 
   writer.WriteMessage(len, data);
+
+  // Post the message at the given port.
+  return PortMap::PostMessage(new Message(
+      port_id, Message::kIllegalPort, buffer, Message::kNormalPriority));
+}
+
+
+DART_EXPORT bool Dart_PostCObject(Dart_Port port_id, Dart_CObject* message) {
+  uint8_t* buffer = NULL;
+  MessageWriter writer(&buffer, allocator);
+
+  writer.WriteCMessage(message);
 
   // Post the message at the given port.
   return PortMap::PostMessage(new Message(
@@ -2424,6 +2445,5 @@ DART_EXPORT void Dart_GetPprofSymbolInfo(void** buffer, int* buffer_size) {
     *buffer_size = 0;
   }
 }
-
 
 }  // namespace dart
