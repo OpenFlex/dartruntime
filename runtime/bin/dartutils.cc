@@ -18,6 +18,9 @@ const char* DartUtils::kIOLibURL = "dart:io";
 
 const char* DartUtils::kIdFieldName = "_id";
 
+static const char* kDpmScheme = "dpm:";
+static const size_t kDpmSchemeLen = strlen(kDpmScheme);
+
 
 static const char* MapLibraryUrl(CommandLineOptions* url_mapping,
                                  const char* url_string) {
@@ -114,10 +117,47 @@ bool DartUtils::IsDartIOLibURL(const char* url_name) {
 }
 
 
+static bool IsDpmSchemeURL(const char* url_name) {
+  return (strncmp(url_name, kDpmScheme, kDpmSchemeLen) == 0);
+}
+
+
+static Dart_Handle ResolveDpmURL(const char* url) {
+  Dart_Handle dUrl = Dart_NewString(url);
+  if (Dart_IsError(dUrl)) {
+    return dUrl;
+  }
+
+  Dart_Handle dIoLibUrl = Dart_NewString(DartUtils::kIOLibURL);
+  Dart_Handle dIoLib = Dart_LookupLibrary(dIoLibUrl);
+  if (Dart_IsError(dIoLib)) {
+    return dIoLib;
+  }
+
+  Dart_Handle dResolved = Dart_InvokeStatic(dIoLib,
+                                            Dart_NewString(""),
+                                            Dart_NewString("resolveLocally"),
+                                            1,
+                                            &dUrl);
+  if (Dart_IsError(dResolved)) {
+    return dResolved;
+  }
+
+  return dResolved;
+}
+
 
 Dart_Handle DartUtils::CanonicalizeURL(CommandLineOptions* url_mapping,
                                        Dart_Handle library,
                                        const char* url_str) {
+  if (IsDpmSchemeURL(url_str)) {
+    Dart_Handle dResolved = ResolveDpmURL(url_str + kDpmSchemeLen);
+    if (Dart_IsError(dResolved)) {
+      return Dart_Error("couldn't resolve %s (problem was %s)", url_str, Dart_GetError(dResolved));
+    }
+    return dResolved;
+  }
+
   // Get the url of the including library.
   Dart_Handle library_url = Dart_LibraryUrl(library);
   if (Dart_IsError(library_url)) {

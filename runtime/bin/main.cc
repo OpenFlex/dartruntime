@@ -292,6 +292,12 @@ static bool CreateIsolateAndSetup(const char* name_prefix,
   Dart_Handle library;
   Dart_EnterScope();
 
+  if (snapshot_buffer != NULL) {
+    // Setup the native resolver as the snapshot does not carry it.
+    Builtin::SetNativeResolver(Builtin::kBuiltinLibrary);
+    Builtin::SetNativeResolver(Builtin::kIOLibrary);
+  }
+
   // Load the specified application script into the newly created isolate.
   if (script_snapshot_buffer != NULL) {
     library = Dart_LoadScriptFromSnapshot(script_snapshot_buffer);
@@ -317,11 +323,6 @@ static bool CreateIsolateAndSetup(const char* name_prefix,
   if (script_snapshot_buffer == NULL) {
     // Implicitly import builtin into app.
     Builtin::ImportLibrary(library, Builtin::kBuiltinLibrary);
-  }
-  if (snapshot_buffer != NULL) {
-    // Setup the native resolver as the snapshot does not carry it.
-    Builtin::SetNativeResolver(Builtin::kBuiltinLibrary);
-    Builtin::SetNativeResolver(Builtin::kIOLibrary);
   }
   Dart_ExitScope();
   return true;

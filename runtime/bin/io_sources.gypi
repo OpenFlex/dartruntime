@@ -39,5 +39,11 @@
     'stdio.dart',
     'timer.dart',
     'timer_impl.dart',
+
+    'dpm_dpm.dart',
+    'dpm_version.dart',
+    'dpm_package.dart',
+    'dpm_repository.dart',
+    'dpm_import.dart',
   ],
 }
