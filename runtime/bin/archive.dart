@@ -43,15 +43,16 @@ interface ExtractArchive default _ExtractArchive {
   bool extractTo(Directory directory);
 
   /**
-   * Extract a single entry of this archive denoted by [path] to specified
-   * [directory] and returns whether it was successful. If no such entry
-   * exists within the archive, returns [false]. If the [directory]
-   * doesn't exist, it will be created.
+   * Extract a single entry of this archive denoted by [pathWithinArchive]
+   * to specified [directory] and returns whether it was successful.
+   * If no such entry exists within the archive, returns [:false:].
+   * If the [directory] doesn't exist, it will be created.
    */
   bool extractEntry(String pathWithinArchive, Directory directory);
 
   /**
    * Returns whether this archive contains an entry with specified path.
+   * If the archive doesn't exist, returns [:false:].
    */
   bool findEntry(String pathWithinArchive);
 }
