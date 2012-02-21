@@ -590,6 +590,7 @@ class RawLibrary : public RawObject {
   RawString* private_key_;
   RawArray* dictionary_;         // Top-level names in this library.
   RawArray* anonymous_classes_;  // Classes containing top-level elements.
+  RawArray* import_map_;         // Map of import variable names to strings.
   RawArray* imports_;            // List of libraries imported without prefix.
   RawArray* imported_into_;      // List of libraries where this library
                                  // is imported into without a prefix.
@@ -615,10 +616,11 @@ class RawLibraryPrefix : public RawObject {
 
   RawObject** from() { return reinterpret_cast<RawObject**>(&ptr()->name_); }
   RawString* name_;               // library prefix name.
-  RawLibrary* library_;           // library imported with a prefix.
+  RawArray* libraries_;           // libraries imported with this prefix.
   RawObject** to() {
-    return reinterpret_cast<RawObject**>(&ptr()->library_);
+    return reinterpret_cast<RawObject**>(&ptr()->libraries_);
   }
+  intptr_t num_libs_;             // Number of library entries in libraries_.
 };
 
 

@@ -138,6 +138,12 @@ macro(t_makeExecutable)
 endmacro()
 
 
+macro(t_makeTest)
+    t_makeExecutable()
+    add_test(NAME ${t_name} COMMAND ${t_name})
+endmacro()
+
+
 macro(_addDependencies)
     if(t_dependencies)
         add_dependencies(${t_name} ${t_dependencies})
@@ -190,13 +196,17 @@ macro(_includeDirectories)
 endmacro()
 
 
-macro(createStringLiteralHelper _var _in _out)
+macro(createStringLiteralHelper _var _in _out _inc _varname)
     set(_dart_files ${ARGN})
     add_custom_command(
         OUTPUT ${_out}
         COMMAND ${PYTHON_EXECUTABLE}
         ARGS ${t_top}/tools/create_string_literal.py
-             --output ${_out} --input_cc ${_in} ${_dart_files}
+                --output ${_out}
+                --input_cc ${_in}
+                --include ${_inc}
+                --var_name ${_varname}
+                ${_dart_files}
         DEPENDS ${_in} COMMENT "Generating ${_out}")
     if(verbose)
         message(STATUS "Adding rule for ${_out}")
@@ -208,8 +218,8 @@ macro(createStringLiteralHelper _var _in _out)
 endmacro()
 
 
-macro(t_embedDartFiles _in _out)
-    createStringLiteralHelper(_gen ${t_top}/${_in} ${_out} ${t_dart_sources})
+macro(t_embedDartFiles _in _out _inc _varname)
+    createStringLiteralHelper(_gen ${t_top}/${_in} ${_out} ${_inc} ${_varname} ${t_dart_sources})
     list(APPEND t_sources ${_gen})
     set(t_dart_sources)
 endmacro()

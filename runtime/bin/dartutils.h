@@ -70,6 +70,9 @@ class DartUtils {
                                      const char* val);
   static bool IsDartSchemeURL(const char* url_name);
   static bool IsDartIOLibURL(const char* url_name);
+  static bool IsDartJsonLibURL(const char* url_name);
+  static bool IsDartUriLibURL(const char* url_name);
+  static bool IsDartUtf8LibURL(const char* url_name);
   static Dart_Handle CanonicalizeURL(CommandLineOptions* url_mapping,
                                      Dart_Handle library,
                                      const char* url_str);
@@ -78,7 +81,8 @@ class DartUtils {
                                 Dart_Handle library,
                                 Dart_Handle url,
                                 Dart_LibraryTag tag,
-                                const char* filename);
+                                const char* filename,
+                                Dart_Handle import_map);
   static bool PostNull(Dart_Port port_id);
   static bool PostInt32(Dart_Port port_id, int32_t value);
 
@@ -87,6 +91,9 @@ class DartUtils {
   static const char* kCoreLibURL;
   static const char* kCoreImplLibURL;
   static const char* kIOLibURL;
+  static const char* kJsonLibURL;
+  static const char* kUriLibURL;
+  static const char* kUtf8LibURL;
 
   static const char* kIdFieldName;
 
