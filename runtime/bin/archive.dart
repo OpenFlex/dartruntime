@@ -55,5 +55,11 @@ interface ExtractArchive default _ExtractArchive {
    * If the archive doesn't exist, returns [:false:].
    */
   bool findEntry(String pathWithinArchive);
+
+  /**
+   * Returns a [List] of paths of all entries in this archive
+   * in no particular order. If the archive doesn't exist, returns [:null:].
+   */
+  List<String> listEntries();
 }
 

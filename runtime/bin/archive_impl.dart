@@ -73,11 +73,23 @@ class _ExtractArchive implements ExtractArchive {
     return _findEntryInArchive(archive.fullPathSync(), pathWithinArchive);
   }
 
+  List<String> listEntries() {
+    if (!archive.existsSync()) {
+      return null;
+    }
+
+    List<String> result = [];
+    _listEntriesInArchive(archive.fullPathSync(), result);
+    return result;
+  }
+
   static void _extractArchive(String archivePath, String outDirectoryPath)
       native "ArchiveExtract_ExtractAll";
   static bool _extractEntryOfArchive(String archivePath, String entryPath,
       String outDirectoryPath) native "ArchiveExtract_ExtractOne";
   static bool _findEntryInArchive(String archivePath, String entryPath)
       native "ArchiveExtract_FindEntry";
+  static void _listEntriesInArchive(String archivePath, List<String> result)
+      native "ArchiveExtract_ListEntries";
 }
 

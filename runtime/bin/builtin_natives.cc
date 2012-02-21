@@ -21,6 +21,7 @@
   V(ArchiveExtract_ExtractAll, 2)                                              \
   V(ArchiveExtract_ExtractOne, 3)                                              \
   V(ArchiveExtract_FindEntry, 2)                                               \
+  V(ArchiveExtract_ListEntries, 2)                                             \
   V(Curl_Download, 7)                                                          \
   V(Directory_CurrentUserHome, 0)                                              \
   V(Directory_List, 7)                                                         \

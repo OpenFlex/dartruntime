@@ -259,3 +259,32 @@ void FUNCTION_NAME(ArchiveExtract_FindEntry)(Dart_NativeArguments args) {
   Dart_ExitScope();
 }
 
+void FUNCTION_NAME(ArchiveExtract_ListEntries)(Dart_NativeArguments args) {
+  Dart_EnterScope();
+
+  const char *archive_path = DartUtils::GetStringValue(Dart_GetNativeArgument(args, 0));
+  Dart_Handle result_list = Dart_GetNativeArgument(args, 1);
+
+  struct archive *r = archive_read_new();
+  archive_read_support_compression_all(r);
+  archive_read_support_format_all(r);
+  archive_read_open_filename(r, archive_path, buffer_size);
+
+  struct archive_entry *e;
+
+  Dart_Handle add_method = Dart_NewString("add");
+
+  while (archive_read_next_header(r, &e) == ARCHIVE_OK) {
+    const char *entry_path = archive_entry_pathname(e);
+    Dart_Handle str = Dart_NewString(entry_path);
+    Dart_Handle result = Dart_InvokeDynamic(result_list, add_method, 1, &str);
+
+    archive_read_data_skip(r);
+  }
+
+  archive_read_close(r);
+  archive_read_finish(r);
+
+  Dart_ExitScope();
+}
+
