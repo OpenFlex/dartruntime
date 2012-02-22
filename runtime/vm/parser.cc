@@ -615,6 +615,7 @@ void Parser::ParseFunction(ParsedFunction* parsed_function) {
 
 
 SequenceNode* Parser::ParseStaticConstGetter(const Function& func) {
+  TRACE_PARSER("ParseStaticConstGetter");
   ParamList params;
   ASSERT(func.num_fixed_parameters() == 0);  // static.
   ASSERT(func.num_optional_parameters() == 0);
@@ -1146,6 +1147,7 @@ AstNode* Parser::CreateImplicitClosureNode(const Function& func,
 
 
 AstNode* Parser::ParseSuperFieldAccess(const String& field_name) {
+  TRACE_PARSER("ParseSuperFieldAccess");
   const intptr_t field_pos = token_index_;
   const Class& super_class = Class::Handle(current_class().SuperClass());
   if (super_class.IsNull()) {
@@ -1359,6 +1361,7 @@ struct FieldInitExpression {
 
 void Parser::ParseInitializedInstanceFields(const Class& cls,
                  GrowableArray<FieldInitExpression>* initializers) {
+  TRACE_PARSER("ParseInitializedInstanceFields");
   const Array& fields = Array::Handle(cls.fields());
   Field& f = Field::Handle();
   const intptr_t saved_pos = token_index_;
@@ -1426,6 +1429,7 @@ void Parser::ParseInitializers(const Class& cls, LocalVariable* receiver) {
 
 void Parser::ParseConstructorRedirection(const Class& cls,
                                          LocalVariable* receiver) {
+  TRACE_PARSER("ParseConstructorRedirection");
   ASSERT(CurrentToken() == Token::kTHIS);
   const intptr_t call_pos = token_index_;
   ConsumeToken();
@@ -1519,6 +1523,7 @@ SequenceNode* Parser::MakeImplicitConstructor(const Function& func) {
 // of function. Parse the formal parameters, initializers and code.
 SequenceNode* Parser::ParseConstructor(const Function& func,
                                        Array& default_parameter_values) {
+  TRACE_PARSER("ParseConstructor");
   ASSERT(func.IsConstructor());
   ASSERT(!func.IsFactory());
   ASSERT(!func.is_static());
@@ -1770,6 +1775,7 @@ SequenceNode* Parser::ParseConstructor(const Function& func,
 // Parse the formal parameters and code.
 SequenceNode* Parser::ParseFunc(const Function& func,
                                 Array& default_parameter_values) {
+  TRACE_PARSER("ParseFunc");
   if (func.IsConstructor()) {
     return ParseConstructor(func, default_parameter_values);
   }
@@ -1900,6 +1906,7 @@ void Parser::SkipInitializers() {
 
 
 void Parser::ParseQualIdent(QualIdent* qual_ident) {
+  TRACE_PARSER("ParseQualIdent");
   ASSERT(IsIdentifier());
   ASSERT(!current_class().IsNull());
   qual_ident->ident_pos = token_index_;
@@ -1935,6 +1942,7 @@ void Parser::ParseQualIdent(QualIdent* qual_ident) {
 
 
 void Parser::ParseMethodOrConstructor(ClassDesc* members, MemberDesc* method) {
+  TRACE_PARSER("ParseMethodOrConstructor");
   ASSERT(CurrentToken() == Token::kLPAREN);
   intptr_t method_pos = this->token_index_;
   ASSERT(method->type != NULL);
@@ -2145,6 +2153,7 @@ void Parser::ParseMethodOrConstructor(ClassDesc* members, MemberDesc* method) {
 
 
 void Parser::ParseFieldDefinition(ClassDesc* members, MemberDesc* field) {
+  TRACE_PARSER("ParseFieldDefinition");
   // The parser has read the first field name and is now at the token
   // after the field name.
   ASSERT(CurrentToken() == Token::kSEMICOLON ||
@@ -2250,7 +2259,29 @@ void Parser::ParseFieldDefinition(ClassDesc* members, MemberDesc* field) {
 }
 
 
+void Parser::CheckOperatorArity(
+    const MemberDesc& member, Token::Kind operator_token) {
+  intptr_t expected_num_parameters;  // Includes receiver.
+  if (operator_token == Token::kASSIGN_INDEX) {
+    expected_num_parameters = 3;
+  } else if ((operator_token == Token::kNEGATE) ||
+      (operator_token == Token::kBIT_NOT)) {
+    expected_num_parameters = 1;
+  } else {
+    expected_num_parameters = 2;
+  }
+  if ((member.params.num_optional_parameters > 0) ||
+      (member.params.has_named_optional_parameters) ||
+      (member.params.num_fixed_parameters != expected_num_parameters)) {
+    // Subtract receiver when reporting number of expected arguments.
+    ErrorMsg(member.name_pos, "operator %s expects %d argument(s)",
+        member.name->ToCString(), (expected_num_parameters - 1));
+  }
+}
+
+
 void Parser::ParseClassMemberDefinition(ClassDesc* members) {
+  TRACE_PARSER("ParseClassMemberDefinition");
   MemberDesc member;
   current_member_ = &member;
   if ((CurrentToken() == Token::kABSTRACT) &&
@@ -2318,6 +2349,7 @@ void Parser::ParseClassMemberDefinition(ClassDesc* members) {
       }
     }
   }
+  Token::Kind operator_token = Token::kILLEGAL;
   // Optionally parse a (possibly named) constructor name or factory.
   if (IsIdentifier() &&
       (CurrentLiteral()->Equals(members->class_name()) || member.has_factory)) {
@@ -2408,10 +2440,11 @@ void Parser::ParseClassMemberDefinition(ClassDesc* members) {
     if (member.has_static) {
       ErrorMsg("operator overloading functions cannot be static");
     }
+    operator_token = CurrentToken();
     member.kind = RawFunction::kFunction;
     member.name_pos = this->token_index_;
     member.name =
-        &String::ZoneHandle(String::NewSymbol(Token::Str(CurrentToken())));
+        &String::ZoneHandle(String::NewSymbol(Token::Str(operator_token)));
     ConsumeToken();
   } else if (IsIdentifier()) {
     member.name = CurrentLiteral();
@@ -2435,6 +2468,9 @@ void Parser::ParseClassMemberDefinition(ClassDesc* members) {
       member.type = &Type::ZoneHandle(Type::DynamicType());
     }
     ParseMethodOrConstructor(members, &member);
+    if (operator_token != Token::kILLEGAL) {
+      CheckOperatorArity(member, operator_token);
+    }
   } else if (CurrentToken() ==  Token::kSEMICOLON ||
              CurrentToken() == Token::kCOMMA ||
              CurrentToken() == Token::kASSIGN) {
@@ -2866,6 +2902,7 @@ void Parser::SkipType(bool allow_void) {
 
 
 void Parser::ParseTypeParameters(const Class& cls) {
+  TRACE_PARSER("ParseTypeParameters");
   if (CurrentToken() == Token::kLT) {
     GrowableArray<AbstractType*> type_parameters_array;
     GrowableArray<AbstractType*> bounds_array;
@@ -2915,6 +2952,7 @@ void Parser::ParseTypeParameters(const Class& cls) {
 
 RawAbstractTypeArguments* Parser::ParseTypeArguments(
     TypeResolution type_resolution) {
+  TRACE_PARSER("ParseTypeArguments");
   if (CurrentToken() == Token::kLT) {
     GrowableArray<AbstractType*> types;
     do {
@@ -2938,6 +2976,7 @@ RawAbstractTypeArguments* Parser::ParseTypeArguments(
 
 // Parse and return an array of interface types.
 RawArray* Parser::ParseInterfaceList() {
+  TRACE_PARSER("ParseInterfaceList");
   ASSERT((CurrentToken() == Token::kIMPLEMENTS) ||
          (CurrentToken() == Token::kEXTENDS));
   GrowableArray<AbstractType*> interfaces;
@@ -3005,6 +3044,7 @@ void Parser::AddInterfaces(intptr_t interfaces_pos,
 
 
 void Parser::ParseTopLevelVariable(TopLevel* top_level) {
+  TRACE_PARSER("ParseTopLevelVariable");
   const bool is_final = (CurrentToken() == Token::kFINAL);
   const bool is_static = true;
   const AbstractType& type = AbstractType::ZoneHandle(ParseFinalVarOrType(
@@ -3062,6 +3102,7 @@ void Parser::ParseTopLevelVariable(TopLevel* top_level) {
 
 
 void Parser::ParseTopLevelFunction(TopLevel* top_level) {
+  TRACE_PARSER("ParseTopLevelFunction");
   AbstractType& result_type = Type::Handle(Type::DynamicType());
   const bool is_static = true;
   if (CurrentToken() == Token::kVOID) {
@@ -3125,6 +3166,7 @@ void Parser::ParseTopLevelFunction(TopLevel* top_level) {
 
 
 void Parser::ParseTopLevelAccessor(TopLevel* top_level) {
+  TRACE_PARSER("ParseTopLevelAccessor");
   const bool is_static = true;
   AbstractType& result_type = AbstractType::Handle();
   bool is_getter = (CurrentToken() == Token::kGET);
@@ -3205,6 +3247,7 @@ void Parser::ParseTopLevelAccessor(TopLevel* top_level) {
 
 
 void Parser::ParseLibraryName() {
+  TRACE_PARSER("ParseLibraryName");
   if ((script_.kind() == RawScript::kLibrary) &&
       (CurrentToken() != Token::kLIBRARY)) {
     // Handle error case early to get consistent error message.
@@ -3245,6 +3288,7 @@ Dart_Handle Parser::CallLibraryTagHandler(Dart_LibraryTag tag,
 
 
 void Parser::ParseLibraryImport() {
+  TRACE_PARSER("ParseLibraryImport");
   while (CurrentToken() == Token::kIMPORT) {
     const intptr_t import_pos = token_index_;
     ConsumeToken();
@@ -3310,6 +3354,7 @@ void Parser::ParseLibraryImport() {
 
 
 void Parser::ParseLibraryInclude() {
+  TRACE_PARSER("ParseLibraryInclude");
   const Array& import_map = Array::Handle(library_.import_map());
   while (CurrentToken() == Token::kSOURCE) {
     const intptr_t source_pos = token_index_;
@@ -3332,6 +3377,7 @@ void Parser::ParseLibraryInclude() {
 
 
 void Parser::ParseLibraryDefinition() {
+  TRACE_PARSER("ParseLibraryDefinition");
   // Handle the script tag.
   if (CurrentToken() == Token::kSCRIPTTAG) {
     // Nothing to do for script tags except to skip them.
@@ -3345,6 +3391,7 @@ void Parser::ParseLibraryDefinition() {
 
 
 void Parser::ParseTopLevel() {
+  TRACE_PARSER("ParseTopLevel");
   // Collect the classes found at the top level in this growable array.
   // They need to be registered with class finalization after parsing
   // has been completed.
@@ -3526,6 +3573,7 @@ void Parser::AddFormalParamsToScope(const ParamList* params,
 // Builds ReturnNode/NativeBodyNode for a native function.
 void Parser::ParseNativeFunctionBlock(const ParamList* params,
                                       const Function& func) {
+  TRACE_PARSER("ParseNativeFunctionBlock");
   const Class& cls = Class::Handle(func.owner());
   const int num_parameters = params->parameters->length();
 
@@ -3642,6 +3690,7 @@ AstNode* Parser::ParseVariableDeclaration(
 // The presence of 'final' must be detected and remembered before the call.
 // If a type is parsed, it is resolved (or not) according to type_resolution.
 RawAbstractType* Parser::ParseFinalVarOrType(TypeResolution type_resolution) {
+  TRACE_PARSER("ParseFinalVarOrType");
   if (CurrentToken() == Token::kVAR) {
     ConsumeToken();
     return Type::DynamicType();
@@ -4352,6 +4401,7 @@ AstNode* Parser::ParseDoWhileStatement(String* label_name) {
 
 AstNode* Parser::ParseForInStatement(intptr_t forin_pos,
                                      SourceLabel* label) {
+  TRACE_PARSER("ParseForInStatement");
   bool is_final = (CurrentToken() == Token::kFINAL);
   const String* loop_var_name = NULL;
   LocalVariable* loop_var = NULL;
@@ -4575,6 +4625,7 @@ AstNode* Parser::MakeAssertCall(intptr_t begin, intptr_t end) {
 
 
 AstNode* Parser::ParseAssertStatement() {
+  TRACE_PARSER("ParseAssertStatement");
   ConsumeToken();  // Consume assert keyword.
   ExpectToken(Token::kLPAREN);
   const intptr_t condition_pos = token_index_;
@@ -4657,6 +4708,7 @@ void Parser::AddCatchParamsToScope(const CatchParamDesc& exception_param,
 
 
 SequenceNode* Parser::ParseFinallyBlock() {
+  TRACE_PARSER("ParseFinallyBlock");
   OpenBlock();
   ExpectToken(Token::kLBRACE);
   ParseStatementSequence();
@@ -4793,11 +4845,13 @@ AstNode* Parser::ParseTryStatement(String* label_name) {
   // operator.
   bool catch_seen = false;
   bool generic_catch_seen = false;
+  intptr_t catch_clause_count = 0;
   SequenceNode* catch_handler_list = NULL;
   const intptr_t handler_pos = token_index_;
   OpenBlock();  // Start the catch block sequence.
   current_block_->scope->AddLabel(end_catch_label);
   while (CurrentToken() == Token::kCATCH) {
+    catch_clause_count++;
     catch_seen = true;
     const intptr_t catch_pos = token_index_;
     ConsumeToken();  // Consume the 'catch'.
@@ -4868,10 +4922,22 @@ AstNode* Parser::ParseTryStatement(String* label_name) {
       }
       AstNode* exception_type = new TypeNode(catch_pos, *exception_param.type);
       AstNode* exception_var = new LoadLocalNode(catch_pos, *catch_excp_var);
-      AstNode* cond_expr = new ComparisonNode(
+      AstNode* type_cond_expr = new ComparisonNode(
           catch_pos, Token::kIS, exception_var, exception_type);
-      current_block_->statements->Add(
-          new IfNode(catch_pos, cond_expr, catch_handler, NULL));
+      if (catch_clause_count == 1) {
+        // Null is also allowed, but check only in the first clause.
+        AstNode* null_literal =
+            new LiteralNode(catch_pos, Instance::ZoneHandle(Instance::null()));
+        AstNode* null_cond_expr = new ComparisonNode(
+            catch_pos, Token::kEQ_STRICT, exception_var, null_literal);
+        AstNode* or_node = new BinaryOpNode(
+            catch_pos, Token::kOR, null_cond_expr, type_cond_expr);
+        current_block_->statements->Add(
+            new IfNode(catch_pos, or_node, catch_handler, NULL));
+      } else {
+        current_block_->statements->Add(
+            new IfNode(catch_pos, type_cond_expr, catch_handler, NULL));
+      }
     } else {
       // No exception type exists in the catch specifier so execute the
       // catch handler code unconditionally.
@@ -4952,6 +5018,7 @@ AstNode* Parser::ParseTryStatement(String* label_name) {
 
 
 AstNode* Parser::ParseJump(String* label_name) {
+  TRACE_PARSER("ParseJump");
   ASSERT(CurrentToken() == Token::kBREAK || CurrentToken() == Token::kCONTINUE);
   Token::Kind jump_kind = CurrentToken();
   const intptr_t jump_pos = token_index_;
@@ -5809,6 +5876,7 @@ AstNode* Parser::ParseStaticCall(const Class& cls,
 
 
 AstNode* Parser::ParseInstanceCall(AstNode* receiver, const String& func_name) {
+  TRACE_PARSER("ParseInstanceCall");
   const intptr_t call_pos = token_index_;
   if (CurrentToken() != Token::kLPAREN) {
     ErrorMsg(call_pos, "left parenthesis expected");
@@ -5819,6 +5887,7 @@ AstNode* Parser::ParseInstanceCall(AstNode* receiver, const String& func_name) {
 
 
 AstNode* Parser::ParseClosureCall(AstNode* closure) {
+  TRACE_PARSER("ParseClosureCall");
   const intptr_t call_pos = token_index_;
   ASSERT(CurrentToken() == Token::kLPAREN);
   ArgumentListNode* arguments = ParseActualParameters(NULL, kAllowConst);
@@ -6343,7 +6412,6 @@ RawObject* Parser::EvaluateConstConstructorCall(
   if (!constructor.IsFactory()) {
     instance = Instance::New(type_class);
     if (!type_arguments.IsNull()) {
-      // TODO(regis): Where should we check the type parameter bounds?
       if (!type_arguments.IsInstantiated()) {
         ErrorMsg("type must be constant in const constructor");
       }
@@ -6654,6 +6722,7 @@ RawString* Parser::ResolveImportVar(intptr_t ident_pos, const String& ident) {
 // Parses type = [ident "."] ident ["<" type { "," type } ">"] and resolve it
 // according to the given type_resolution.
 RawAbstractType* Parser::ParseType(TypeResolution type_resolution) {
+  TRACE_PARSER("ParseType");
   if (CurrentToken() != Token::kIDENT) {
     ErrorMsg("type name expected");
   }
@@ -7046,6 +7115,7 @@ AstNode* Parser::ParseMapLiteral(intptr_t type_pos,
 
 
 AstNode* Parser::ParseCompoundLiteral() {
+  TRACE_PARSER("ParseCompoundLiteral");
   bool is_const = false;
   if (CurrentToken() == Token::kCONST) {
     is_const = true;
@@ -7287,6 +7357,7 @@ AstNode* Parser::ParseNewOperator() {
 // a string literal always begins and ends with a kSTRING token, and
 // there are never two kSTRING tokens next to each other.
 AstNode* Parser::ParseStringLiteral() {
+  TRACE_PARSER("ParseStringLiteral");
   AstNode* primary = NULL;
   const intptr_t literal_start = token_index_;
   if ((CurrentToken() == Token::kSTRING) &&
@@ -7342,6 +7413,7 @@ AstNode* Parser::ParseStringLiteral() {
 // a string literal always begins and ends with a kSTRING token, and
 // there are never two kSTRING tokens next to each other.
 String* Parser::ParseImportStringLiteral() {
+  TRACE_PARSER("ParseImportStringLiteral");
   if ((CurrentToken() == Token::kSTRING) &&
       (LookaheadToken(1) != Token::kINTERPOL_VAR) &&
       (LookaheadToken(1) != Token::kINTERPOL_START)) {

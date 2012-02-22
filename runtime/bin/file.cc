@@ -59,7 +59,14 @@ void FUNCTION_NAME(File_Open)(Dart_NativeArguments args) {
   if (mode == kAppend) {
     file_mode = File::kWrite;
   }
-  File* file = File::Open(filename, file_mode);
+  // Check that the file exists before opening it only for
+  // reading. This is to prevent the opening of directories as
+  // files. Directories can be opened for reading using the posix
+  // 'open' call.
+  File* file = NULL;
+  if (((file_mode & File::kWrite) != 0) || File::Exists(filename)) {
+    file = File::Open(filename, file_mode);
+  }
   Dart_SetReturnValue(args, Dart_NewInteger(reinterpret_cast<intptr_t>(file)));
   Dart_ExitScope();
 }
@@ -309,6 +316,21 @@ void FUNCTION_NAME(File_Delete)(Dart_NativeArguments args) {
       DartUtils::GetStringValue(Dart_GetNativeArgument(args, 0));
   bool result = File::Delete(str);
   Dart_SetReturnValue(args, Dart_NewBoolean(result));
+  Dart_ExitScope();
+}
+
+
+void FUNCTION_NAME(File_Directory)(Dart_NativeArguments args) {
+  Dart_EnterScope();
+  const char* str =
+      DartUtils::GetStringValue(Dart_GetNativeArgument(args, 0));
+  char* str_copy = strdup(str);
+  char* path = File::GetContainingDirectory(str_copy);
+  if (path != NULL) {
+    Dart_SetReturnValue(args, Dart_NewString(path));
+  }
+  free(str_copy);
+  free(path);
   Dart_ExitScope();
 }
 

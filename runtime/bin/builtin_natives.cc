@@ -24,12 +24,12 @@
   V(ArchiveExtract_ListEntries, 2)                                             \
   V(Curl_Download, 7)                                                          \
   V(Directory_CurrentUserHome, 0)                                              \
-  V(Directory_List, 7)                                                         \
   V(Directory_ListSync, 7)                                                     \
   V(Directory_Exists, 1)                                                       \
   V(Directory_Create, 1)                                                       \
   V(Directory_CreateTemp, 2)                                                   \
   V(Directory_Delete, 2)                                                       \
+  V(Directory_NewServicePort, 0)                                               \
   V(EventHandler_Start, 1)                                                     \
   V(EventHandler_SendData, 4)                                                  \
   V(Exit, 1)                                                                   \
@@ -48,6 +48,7 @@
   V(File_Flush, 1)                                                             \
   V(File_Create, 1)                                                            \
   V(File_Delete, 1)                                                            \
+  V(File_Directory, 1)                                                         \
   V(File_FullPath, 1)                                                          \
   V(File_OpenStdio, 1)                                                         \
   V(File_GetStdioHandleType, 1)                                                \
