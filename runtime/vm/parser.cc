@@ -5908,7 +5908,18 @@ ArgumentListNode* Parser::ParseActualParameters(
   } else {
     ConsumeToken();
   }
-  ExpectToken(Token::kRPAREN);
+  if (CurrentToken() == Token::kRPAREN
+      && LookaheadToken(1) == Token::kDO) {
+    ConsumeToken();
+    ConsumeToken();
+    if (IsFunctionLiteral()) {
+      arguments->Add(ParseExpr(require_const));
+    } else {
+      ErrorMsg("function literal expected after 'do'");
+    }
+  } else {
+    ExpectToken(Token::kRPAREN);
+  }
   SetAllowFunctionLiterals(saved_mode);
   if (named_argument_seen) {
     arguments->set_names(Array::Handle(NewArray<const String>(names)));
