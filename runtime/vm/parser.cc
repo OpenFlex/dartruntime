@@ -2910,12 +2910,9 @@ void Parser::ParseInterfaceDefinition(
     // can be omitted), verify that it matches the list of type parameters of
     // the interface in number and names.
     if (factory_class.NumTypeParameters() > 0) {
-      const TypeArguments& interface_type_parameters =
-          TypeArguments::Handle(interface.type_parameters());
-      const TypeArguments& factory_type_parameters =
-          TypeArguments::Handle(factory_class.type_parameters());
-      if (!TypeArguments::AreIdenticalTypeParameters(interface_type_parameters,
-                                                     factory_type_parameters)) {
+      if (!AbstractTypeArguments::AreIdentical(
+          AbstractTypeArguments::Handle(interface.type_parameters()),
+          AbstractTypeArguments::Handle(factory_class.type_parameters()))) {
         const String& interface_name = String::Handle(interface.Name());
         ErrorMsg(factory_name.ident_pos,
                  "mismatch in number or names of type parameters between "
@@ -3399,9 +3396,9 @@ Dart_Handle Parser::CallLibraryTagHandler(Dart_LibraryTag tag,
     ErrorMsg(token_pos, "no library handler registered");
   }
   Dart_Handle result = handler(tag,
-                               Api::NewLocalHandle(isolate, library_),
-                               Api::NewLocalHandle(isolate, url),
-                               Api::NewLocalHandle(isolate, import_map));
+                               Api::NewHandle(isolate, library_.raw()),
+                               Api::NewHandle(isolate, url.raw()),
+                               Api::NewHandle(isolate, import_map.raw()));
   if (Dart_IsError(result)) {
     Error& prev_error = Error::Handle();
     prev_error ^= Api::UnwrapHandle(result);
@@ -6688,6 +6685,7 @@ AstNode* Parser::RunStaticFieldInitializer(const Field& field) {
       Error& error = Error::Handle();
       error ^= const_value.raw();
       if (const_value.IsUnhandledException()) {
+        field.set_value(Instance::Handle());
         // It is a compile-time error if evaluation of a compile-time constant
         // would raise an exception.
         if (field.is_final()) {

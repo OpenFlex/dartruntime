@@ -58,54 +58,6 @@ CodeGeneratorState::~CodeGeneratorState() {
 }
 
 
-class CodeGenerator::HandlerList : public ZoneAllocated {
- public:
-  struct HandlerDesc {
-    intptr_t try_index;  // Try block index handled by the handler.
-    intptr_t pc_offset;  // Handler PC offset value.
-  };
-
-  HandlerList() : list_() {
-  }
-  ~HandlerList() { }
-
-  intptr_t Length() const {
-    return list_.length();
-  }
-
-  intptr_t TryIndex(int index) const {
-    return list_[index].try_index;
-  }
-  intptr_t PcOffset(int index) const {
-    return list_[index].pc_offset;
-  }
-  void SetPcOffset(int index, intptr_t handler_pc) {
-    list_[index].pc_offset = handler_pc;
-  }
-
-  void AddHandler(intptr_t try_index, intptr_t pc_offset) {
-    struct HandlerDesc data;
-    data.try_index = try_index;
-    data.pc_offset = pc_offset;
-    list_.Add(data);
-  }
-
-  RawExceptionHandlers* FinalizeExceptionHandlers(uword entry_point) {
-    intptr_t num_handlers = Length();
-    const ExceptionHandlers& handlers =
-        ExceptionHandlers::Handle(ExceptionHandlers::New(num_handlers));
-    for (intptr_t i = 0; i < num_handlers; i++) {
-      handlers.SetHandlerEntry(i, TryIndex(i), (entry_point + PcOffset(i)));
-    }
-    return handlers.raw();
-  }
-
- private:
-  GrowableArray<struct HandlerDesc> list_;
-  DISALLOW_COPY_AND_ASSIGN(HandlerList);
-};
-
-
 CodeGenerator::CodeGenerator(Assembler* assembler,
                              const ParsedFunction& parsed_function)
     : assembler_(assembler),
@@ -122,7 +74,7 @@ CodeGenerator::CodeGenerator(Assembler* assembler,
   ASSERT(Isolate::Current()->long_jump_base()->IsSafeToJump());
   pc_descriptors_list_ = new DescriptorList();
   // We do not build any stack maps in the unoptimizing compiler.
-  exception_handlers_list_ = new CodeGenerator::HandlerList();
+  exception_handlers_list_ = new ExceptionHandlerList();
 }
 
 
@@ -960,12 +912,8 @@ void CodeGenerator::VisitSequenceNode(SequenceNode* node_sequence) {
   // taken care of unchaining the context.
   if (node_sequence->label() != NULL) {
     __ Bind(node_sequence->label()->break_label());
-
-    // The context saved on entry must be restored.
-    if ((node_sequence == parsed_function_.node_sequence()) &&
-        (parsed_function_.saved_context_var() != NULL)) {
-      GenerateLoadVariable(CTX, *parsed_function_.saved_context_var());
-    }
+    // Outermost sequence cannot have a label.
+    ASSERT(node_sequence != parsed_function_.node_sequence());
   }
   set_context_level(previous_context_level);
 }
@@ -1362,7 +1310,7 @@ void CodeGenerator::GenerateInstanceOf(intptr_t node_id,
 
   const Immediate raw_null =
       Immediate(reinterpret_cast<intptr_t>(Object::null()));
-  Label done;
+  Label done, check_negate_done;
   // If type is instantiated and non-parameterized, we can inline code
   // checking whether the tested instance is a Smi.
   if (type.IsInstantiated()) {
@@ -1418,6 +1366,8 @@ void CodeGenerator::GenerateInstanceOf(intptr_t node_id,
       __ Bind(&runtime_call);
       // Fall through to runtime call.
     } else {
+      ASSERT(!requires_type_arguments);
+      // Test if object is Smi and for a couple known test-classes.
       Label compare_classes;
       __ testl(EAX, Immediate(kSmiTagMask));
       __ j(NOT_ZERO, &compare_classes, Assembler::kNearJump);
@@ -1445,9 +1395,47 @@ void CodeGenerator::GenerateInstanceOf(intptr_t node_id,
         compare_class = &Class::ZoneHandle(
             Isolate::Current()->object_store()->bool_class());
       } else if (!type_class.is_interface()) {
-        compare_class = &type_class;
+        // Use equality test in prolog of cache test.
+        compare_class = NULL;
       }
-      if (compare_class != NULL) {
+      // EAX: instance being tested.
+      if (compare_class == NULL) {
+        // Optional quick equality check and then the type test cache test.
+        Label loop, runtime_call, found_in_cache, cache_test;
+        __ movl(ECX, FieldAddress(EAX, Object::class_offset()));
+        if (!type_class.is_interface()) {
+          // Class equality test first.
+          __ CompareObject(ECX, type_class);
+          __ j(NOT_EQUAL, &cache_test, Assembler::kNearJump);
+          // Equal!
+          __ PushObject(negate_result ? bool_false : bool_true);
+          __ jmp(&done, Assembler::kNearJump);
+        }
+        __ Bind(&cache_test);
+        // TODO(srdjan): Convert other tests to this simple form.
+        // Class we are testing against has no type arguments.
+        // TODO(srdjan): Canonicalize initial array?
+        // TODO(srdjan): Account for 'negate_result' in cache.
+        // The type test array is null-terminated. Two consecutive
+        // array elements correspond to one test:
+        //   array[i + 0] : class.
+        //   array[i + 1] : result for the class.
+        AddCurrentDescriptor(PcDescriptors::kTypeTest, node_id, token_index);
+        __ LoadObject(EDX, Array::ZoneHandle(Array::New(2)));
+        __ addl(EDX, Immediate(Array::data_offset() - kHeapObjectTag));
+        __ Bind(&loop);
+        __ movl(EBX, Address(EDX, 0));
+        __ cmpl(ECX, EBX);
+        __ j(EQUAL, &found_in_cache, Assembler::kNearJump);
+        __ addl(EDX, Immediate(kWordSize * 2));
+        __ cmpl(EBX, raw_null);
+        __ j(NOT_EQUAL, &loop, Assembler::kNearJump);
+        __ jmp(&runtime_call, Assembler::kNearJump);
+        __ Bind(&found_in_cache);
+        __ pushl(Address(EDX, kWordSize));
+        __ jmp(&check_negate_done);
+        __ Bind(&runtime_call);
+      } else {
         Label runtime_call;
         __ movl(ECX, FieldAddress(EAX, Object::class_offset()));
         __ CompareObject(ECX, *compare_class);
@@ -1461,7 +1449,10 @@ void CodeGenerator::GenerateInstanceOf(intptr_t node_id,
   __ PushObject(Object::ZoneHandle());  // Make room for the result.
   const Immediate location =
       Immediate(reinterpret_cast<int32_t>(Smi::New(token_index)));
+  const Immediate node_id_as_smi =
+      Immediate(reinterpret_cast<int32_t>(Smi::New(node_id)));
   __ pushl(location);  // Push the source location.
+  __ pushl(node_id_as_smi);  // node-id.
   __ pushl(EAX);  // Push the instance.
   __ PushObject(type);  // Push the type.
   if (!type.IsInstantiated()) {
@@ -1472,7 +1463,8 @@ void CodeGenerator::GenerateInstanceOf(intptr_t node_id,
   GenerateCallRuntime(node_id, token_index, kInstanceofRuntimeEntry);
   // Pop the two parameters supplied to the runtime entry. The result of the
   // instanceof runtime call will be left as the result of the operation.
-  __ addl(ESP, Immediate(4 * kWordSize));
+  __ addl(ESP, Immediate(5 * kWordSize));
+  __ Bind(&check_negate_done);
   if (negate_result) {
     Label negate_done;
     __ popl(EDX);

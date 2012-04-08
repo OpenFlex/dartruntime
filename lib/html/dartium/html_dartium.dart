@@ -222,14 +222,12 @@ _wrap(raw) {
     case 'HashChangeEvent': return new _HashChangeEventImpl._wrap(domObject);
     case 'HTMLHeadElement': return new _HeadElementImpl._wrap(domObject);
     case 'HTMLHeadingElement': return new _HeadingElementImpl._wrap(domObject);
-    case 'HighPass2FilterNode': return new _HighPass2FilterNodeImpl._wrap(domObject);
     case 'History': return new _HistoryImpl._wrap(domObject);
     case 'HTMLHtmlElement': return new _HtmlElementImpl._wrap(domObject);
     case 'IDBAny': return new _IDBAnyImpl._wrap(domObject);
     case 'IDBCursor': return new _IDBCursorImpl._wrap(domObject);
     case 'IDBCursorWithValue': return new _IDBCursorWithValueImpl._wrap(domObject);
     case 'IDBDatabase': return new _IDBDatabaseImpl._wrap(domObject);
-    case 'IDBDatabaseError': return new _IDBDatabaseErrorImpl._wrap(domObject);
     case 'IDBDatabaseException': return new _IDBDatabaseExceptionImpl._wrap(domObject);
     case 'IDBFactory': return new _IDBFactoryImpl._wrap(domObject);
     case 'IDBIndex': return new _IDBIndexImpl._wrap(domObject);
@@ -259,7 +257,6 @@ _wrap(raw) {
     case 'MediaStream': return new _MediaStreamImpl._wrap(domObject);
     case 'LocalMediaStream': return new _LocalMediaStreamImpl._wrap(domObject);
     case 'Location': return new _LocationImpl._wrap(domObject);
-    case 'LowPass2FilterNode': return new _LowPass2FilterNodeImpl._wrap(domObject);
     case 'HTMLMapElement': return new _MapElementImpl._wrap(domObject);
     case 'HTMLMarqueeElement': return new _MarqueeElementImpl._wrap(domObject);
     case 'MediaController': return new _MediaControllerImpl._wrap(domObject);
@@ -282,7 +279,9 @@ _wrap(raw) {
     case 'HTMLMeterElement': return new _MeterElementImpl._wrap(domObject);
     case 'HTMLModElement': return new _ModElementImpl._wrap(domObject);
     case 'MouseEvent': return new _MouseEventImpl._wrap(domObject);
+    case 'MutationCallback': return new _MutationCallbackImpl._wrap(domObject);
     case 'MutationEvent': return new _MutationEventImpl._wrap(domObject);
+    case 'MutationRecord': return new _MutationRecordImpl._wrap(domObject);
     case 'NamedNodeMap': return new _NamedNodeMapImpl._wrap(domObject);
     case 'Navigator': return new _NavigatorImpl._wrap(domObject);
     case 'NavigatorUserMediaError': return new _NavigatorUserMediaErrorImpl._wrap(domObject);
@@ -301,6 +300,7 @@ _wrap(raw) {
     case 'OperationNotAllowedException': return new _OperationNotAllowedExceptionImpl._wrap(domObject);
     case 'HTMLOptGroupElement': return new _OptGroupElementImpl._wrap(domObject);
     case 'HTMLOptionElement': return new _OptionElementImpl._wrap(domObject);
+    case 'Oscillator': return new _OscillatorImpl._wrap(domObject);
     case 'HTMLOutputElement': return new _OutputElementImpl._wrap(domObject);
     case 'OverflowEvent': return new _OverflowEventImpl._wrap(domObject);
     case 'PageTransitionEvent': return new _PageTransitionEventImpl._wrap(domObject);
@@ -541,6 +541,7 @@ _wrap(raw) {
     case 'ValidityState': return new _ValidityStateImpl._wrap(domObject);
     case 'HTMLVideoElement': return new _VideoElementImpl._wrap(domObject);
     case 'WaveShaperNode': return new _WaveShaperNodeImpl._wrap(domObject);
+    case 'WaveTable': return new _WaveTableImpl._wrap(domObject);
     case 'WebGLActiveInfo': return new _WebGLActiveInfoImpl._wrap(domObject);
     case 'WebGLBuffer': return new _WebGLBufferImpl._wrap(domObject);
     case 'WebGLCompressedTextureS3TC': return new _WebGLCompressedTextureS3TCImpl._wrap(domObject);
@@ -554,10 +555,12 @@ _wrap(raw) {
     case 'WebGLRenderbuffer': return new _WebGLRenderbufferImpl._wrap(domObject);
     case 'WebGLRenderingContext': return new _WebGLRenderingContextImpl._wrap(domObject);
     case 'WebGLShader': return new _WebGLShaderImpl._wrap(domObject);
+    case 'WebGLShaderPrecisionFormat': return new _WebGLShaderPrecisionFormatImpl._wrap(domObject);
     case 'WebGLTexture': return new _WebGLTextureImpl._wrap(domObject);
     case 'WebGLUniformLocation': return new _WebGLUniformLocationImpl._wrap(domObject);
     case 'WebGLVertexArrayObjectOES': return new _WebGLVertexArrayObjectOESImpl._wrap(domObject);
     case 'WebKitCSSRegionRule': return new _WebKitCSSRegionRuleImpl._wrap(domObject);
+    case 'WebKitMutationObserver': return new _WebKitMutationObserverImpl._wrap(domObject);
     case 'WebKitNamedFlow': return new _WebKitNamedFlowImpl._wrap(domObject);
     case 'WebSocket': return new _WebSocketImpl._wrap(domObject);
     case 'WheelEvent': return new _WheelEventImpl._wrap(domObject);
@@ -1033,20 +1036,16 @@ class _AudioContextImpl extends _DOMTypeBase implements AudioContext {
     return _wrap(_ptr.createGainNode());
   }
 
-  HighPass2FilterNode createHighPass2Filter() {
-    return _wrap(_ptr.createHighPass2Filter());
-  }
-
   JavaScriptAudioNode createJavaScriptNode(int bufferSize) {
     return _wrap(_ptr.createJavaScriptNode(_unwrap(bufferSize)));
   }
 
-  LowPass2FilterNode createLowPass2Filter() {
-    return _wrap(_ptr.createLowPass2Filter());
-  }
-
   MediaElementAudioSourceNode createMediaElementSource(MediaElement mediaElement) {
     return _wrap(_ptr.createMediaElementSource(_unwrap(mediaElement)));
+  }
+
+  Oscillator createOscillator() {
+    return _wrap(_ptr.createOscillator());
   }
 
   AudioPannerNode createPanner() {
@@ -1055,6 +1054,10 @@ class _AudioContextImpl extends _DOMTypeBase implements AudioContext {
 
   WaveShaperNode createWaveShaper() {
     return _wrap(_ptr.createWaveShaper());
+  }
+
+  WaveTable createWaveTable(Float32Array real, Float32Array imag) {
+    return _wrap(_ptr.createWaveTable(_unwrap(real), _unwrap(imag)));
   }
 
   void decodeAudioData(ArrayBuffer audioData, AudioBufferCallback successCallback, [AudioBufferCallback errorCallback = null]) {
@@ -8201,6 +8204,8 @@ class _ElementImpl extends _NodeImpl implements Element {
 
   void set contentEditable(String value) { _ptr.contentEditable = _unwrap(value); }
 
+  Map<String, String> get dataset() => _wrap(_ptr.dataset);
+
   String get dir() => _wrap(_ptr.dir);
 
   void set dir(String value) { _ptr.dir = _unwrap(value); }
@@ -8536,6 +8541,8 @@ class _ElementEventsImpl extends _EventsImpl implements ElementEvents {
   EventListenerList get touchCancel() => _get('touchcancel');
 
   EventListenerList get touchEnd() => _get('touchend');
+
+  EventListenerList get touchEnter() => _get('touchenter');
 
   EventListenerList get touchLeave() => _get('touchleave');
 
@@ -9067,6 +9074,10 @@ class _EventTargetImpl extends _DOMTypeBase implements EventTarget {
 
 class _FieldSetElementImpl extends _ElementImpl implements FieldSetElement {
   _FieldSetElementImpl._wrap(ptr) : super._wrap(ptr);
+
+  bool get disabled() => _wrap(_ptr.disabled);
+
+  void set disabled(bool value) { _ptr.disabled = _unwrap(value); }
 
   FormElement get form() => _wrap(_ptr.form);
 
@@ -9957,14 +9968,6 @@ class _HeadingElementImpl extends _ElementImpl implements HeadingElement {
   void set align(String value) { _ptr.align = _unwrap(value); }
 }
 
-class _HighPass2FilterNodeImpl extends _AudioNodeImpl implements HighPass2FilterNode {
-  _HighPass2FilterNodeImpl._wrap(ptr) : super._wrap(ptr);
-
-  AudioParam get cutoff() => _wrap(_ptr.cutoff);
-
-  AudioParam get resonance() => _wrap(_ptr.resonance);
-}
-
 class _HistoryImpl extends _DOMTypeBase implements History {
   _HistoryImpl._wrap(ptr) : super._wrap(ptr);
 
@@ -10133,18 +10136,6 @@ class _IDBDatabaseImpl extends _DOMTypeBase implements IDBDatabase {
     }
     throw "Incorrect number or type of arguments";
   }
-}
-
-class _IDBDatabaseErrorImpl extends _DOMTypeBase implements IDBDatabaseError {
-  _IDBDatabaseErrorImpl._wrap(ptr) : super._wrap(ptr);
-
-  int get code() => _wrap(_ptr.code);
-
-  void set code(int value) { _ptr.code = _unwrap(value); }
-
-  String get message() => _wrap(_ptr.message);
-
-  void set message(String value) { _ptr.message = _unwrap(value); }
 }
 
 class _IDBDatabaseExceptionImpl extends _DOMTypeBase implements IDBDatabaseException {
@@ -10550,6 +10541,10 @@ class _IFrameElementImpl extends _ElementImpl implements IFrameElement {
   String get src() => _wrap(_ptr.src);
 
   void set src(String value) { _ptr.src = _unwrap(value); }
+
+  String get srcdoc() => _wrap(_ptr.srcdoc);
+
+  void set srcdoc(String value) { _ptr.srcdoc = _unwrap(value); }
 
   String get width() => _wrap(_ptr.width);
 
@@ -11448,14 +11443,6 @@ class _LocationImpl extends _DOMTypeBase implements Location {
   }
 }
 
-class _LowPass2FilterNodeImpl extends _AudioNodeImpl implements LowPass2FilterNode {
-  _LowPass2FilterNodeImpl._wrap(ptr) : super._wrap(ptr);
-
-  AudioParam get cutoff() => _wrap(_ptr.cutoff);
-
-  AudioParam get resonance() => _wrap(_ptr.resonance);
-}
-
 class _MapElementImpl extends _ElementImpl implements MapElement {
   _MapElementImpl._wrap(ptr) : super._wrap(ptr);
 
@@ -12193,6 +12180,10 @@ class _MouseEventImpl extends _UIEventImpl implements MouseEvent {
   }
 }
 
+class _MutationCallbackImpl extends _DOMTypeBase implements MutationCallback {
+  _MutationCallbackImpl._wrap(ptr) : super._wrap(ptr);
+}
+
 class _MutationEventImpl extends _EventImpl implements MutationEvent {
   _MutationEventImpl._wrap(ptr) : super._wrap(ptr);
 
@@ -12210,6 +12201,28 @@ class _MutationEventImpl extends _EventImpl implements MutationEvent {
     _ptr.initMutationEvent(_unwrap(type), _unwrap(canBubble), _unwrap(cancelable), _unwrap(relatedNode), _unwrap(prevValue), _unwrap(newValue), _unwrap(attrName), _unwrap(attrChange));
     return;
   }
+}
+
+class _MutationRecordImpl extends _DOMTypeBase implements MutationRecord {
+  _MutationRecordImpl._wrap(ptr) : super._wrap(ptr);
+
+  NodeList get addedNodes() => _wrap(_ptr.addedNodes);
+
+  String get attributeName() => _wrap(_ptr.attributeName);
+
+  String get attributeNamespace() => _wrap(_ptr.attributeNamespace);
+
+  Node get nextSibling() => _wrap(_ptr.nextSibling);
+
+  String get oldValue() => _wrap(_ptr.oldValue);
+
+  Node get previousSibling() => _wrap(_ptr.previousSibling);
+
+  NodeList get removedNodes() => _wrap(_ptr.removedNodes);
+
+  Node get target() => _wrap(_ptr.target);
+
+  String get type() => _wrap(_ptr.type);
 }
 
 class _NamedNodeMapImpl extends _DOMTypeBase implements NamedNodeMap {
@@ -12831,12 +12844,12 @@ class _NotificationImpl extends _EventTargetImpl implements Notification {
 
   void set dir(String value) { _ptr.dir = _unwrap(value); }
 
-  String get replaceId() => _wrap(_ptr.replaceId);
+  String get tag() => _wrap(_ptr.tag);
 
-  void set replaceId(String value) { _ptr.replaceId = _unwrap(value); }
+  void set tag(String value) { _ptr.tag = _unwrap(value); }
 
-  void cancel() {
-    _ptr.cancel();
+  void close() {
+    _ptr.close();
     return;
   }
 
@@ -13074,6 +13087,23 @@ class _OptionElementImpl extends _ElementImpl implements OptionElement {
   String get value() => _wrap(_ptr.value);
 
   void set value(String value) { _ptr.value = _unwrap(value); }
+}
+
+class _OscillatorImpl extends _AudioSourceNodeImpl implements Oscillator {
+  _OscillatorImpl._wrap(ptr) : super._wrap(ptr);
+
+  AudioParam get detune() => _wrap(_ptr.detune);
+
+  AudioParam get frequency() => _wrap(_ptr.frequency);
+
+  int get type() => _wrap(_ptr.type);
+
+  void set type(int value) { _ptr.type = _unwrap(value); }
+
+  void setWaveTable(WaveTable waveTable) {
+    _ptr.setWaveTable(_unwrap(waveTable));
+    return;
+  }
 }
 
 class _OutputElementImpl extends _ElementImpl implements OutputElement {
@@ -19876,6 +19906,10 @@ class _WaveShaperNodeImpl extends _AudioNodeImpl implements WaveShaperNode {
   void set curve(Float32Array value) { _ptr.curve = _unwrap(value); }
 }
 
+class _WaveTableImpl extends _DOMTypeBase implements WaveTable {
+  _WaveTableImpl._wrap(ptr) : super._wrap(ptr);
+}
+
 class _WebGLActiveInfoImpl extends _DOMTypeBase implements WebGLActiveInfo {
   _WebGLActiveInfoImpl._wrap(ptr) : super._wrap(ptr);
 
@@ -20317,6 +20351,10 @@ class _WebGLRenderingContextImpl extends _CanvasRenderingContextImpl implements 
     return _wrap(_ptr.getShaderParameter(_unwrap(shader), _unwrap(pname)));
   }
 
+  WebGLShaderPrecisionFormat getShaderPrecisionFormat(int shadertype, int precisiontype) {
+    return _wrap(_ptr.getShaderPrecisionFormat(_unwrap(shadertype), _unwrap(precisiontype)));
+  }
+
   String getShaderSource(WebGLShader shader) {
     return _wrap(_ptr.getShaderSource(_unwrap(shader)));
   }
@@ -20724,6 +20762,16 @@ class _WebGLShaderImpl extends _DOMTypeBase implements WebGLShader {
   _WebGLShaderImpl._wrap(ptr) : super._wrap(ptr);
 }
 
+class _WebGLShaderPrecisionFormatImpl extends _DOMTypeBase implements WebGLShaderPrecisionFormat {
+  _WebGLShaderPrecisionFormatImpl._wrap(ptr) : super._wrap(ptr);
+
+  int get precision() => _wrap(_ptr.precision);
+
+  int get rangeMax() => _wrap(_ptr.rangeMax);
+
+  int get rangeMin() => _wrap(_ptr.rangeMin);
+}
+
 class _WebGLTextureImpl extends _DOMTypeBase implements WebGLTexture {
   _WebGLTextureImpl._wrap(ptr) : super._wrap(ptr);
 }
@@ -20740,6 +20788,15 @@ class _WebKitCSSRegionRuleImpl extends _CSSRuleImpl implements WebKitCSSRegionRu
   _WebKitCSSRegionRuleImpl._wrap(ptr) : super._wrap(ptr);
 
   CSSRuleList get cssRules() => _wrap(_ptr.cssRules);
+}
+
+class _WebKitMutationObserverImpl extends _DOMTypeBase implements WebKitMutationObserver {
+  _WebKitMutationObserverImpl._wrap(ptr) : super._wrap(ptr);
+
+  void disconnect() {
+    _ptr.disconnect();
+    return;
+  }
 }
 
 class _WebKitNamedFlowImpl extends _DOMTypeBase implements WebKitNamedFlow {
@@ -22200,10 +22257,13 @@ interface AbstractWorker extends EventTarget {
 
   AbstractWorkerEvents get on();
 
+  /** @domName addEventListener */
   void $dom_addEventListener(String type, EventListener listener, [bool useCapture]);
 
+  /** @domName dispatchEvent */
   bool $dom_dispatchEvent(Event evt);
 
+  /** @domName removeEventListener */
   void $dom_removeEventListener(String type, EventListener listener, [bool useCapture]);
 }
 
@@ -22554,17 +22614,17 @@ interface AudioContext {
 
   AudioGainNode createGainNode();
 
-  HighPass2FilterNode createHighPass2Filter();
-
   JavaScriptAudioNode createJavaScriptNode(int bufferSize);
 
-  LowPass2FilterNode createLowPass2Filter();
-
   MediaElementAudioSourceNode createMediaElementSource(MediaElement mediaElement);
+
+  Oscillator createOscillator();
 
   AudioPannerNode createPanner();
 
   WaveShaperNode createWaveShaper();
+
+  WaveTable createWaveTable(Float32Array real, Float32Array imag);
 
   void decodeAudioData(ArrayBuffer audioData, AudioBufferCallback successCallback, [AudioBufferCallback errorCallback]);
 
@@ -23184,6 +23244,12 @@ interface CSSPrimitiveValue extends CSSValue {
   static final int CSS_UNKNOWN = 0;
 
   static final int CSS_URI = 20;
+
+  static final int CSS_VH = 27;
+
+  static final int CSS_VMIN = 28;
+
+  static final int CSS_VW = 26;
 
   final int primitiveType;
 
@@ -25715,10 +25781,13 @@ interface DOMApplicationCache extends EventTarget {
 
   void abort();
 
+  /** @domName addEventListener */
   void $dom_addEventListener(String type, EventListener listener, [bool useCapture]);
 
+  /** @domName dispatchEvent */
   bool $dom_dispatchEvent(Event evt);
 
+  /** @domName removeEventListener */
   void $dom_removeEventListener(String type, EventListener listener, [bool useCapture]);
 
   void swapCache();
@@ -26362,6 +26431,7 @@ interface Document extends HtmlElement {
 
   String cookie;
 
+  /** @domName defaultView */
   final Window window;
 
   final Element documentElement;
@@ -26404,18 +26474,23 @@ interface Document extends HtmlElement {
 
   DocumentFragment createDocumentFragment();
 
+  /** @domName createElement */
   Element $dom_createElement(String tagName);
 
+  /** @domName createElementNS */
   Element $dom_createElementNS(String namespaceURI, String qualifiedName);
 
+  /** @domName createEvent */
   Event $dom_createEvent(String eventType);
 
   Range createRange();
 
+  /** @domName createTextNode */
   Text $dom_createTextNode(String data);
 
   Touch createTouch(Window window, EventTarget target, int identifier, int pageX, int pageY, int screenX, int screenY, int webkitRadiusX, int webkitRadiusY, num webkitRotationAngle, num webkitForce);
 
+  /** @domName createTouchList */
   TouchList $dom_createTouchList();
 
   Element elementFromPoint(int x, int y);
@@ -26424,12 +26499,16 @@ interface Document extends HtmlElement {
 
   CanvasRenderingContext getCSSCanvasContext(String contextId, String name, int width, int height);
 
+  /** @domName getElementById */
   Element $dom_getElementById(String elementId);
 
+  /** @domName getElementsByClassName */
   NodeList $dom_getElementsByClassName(String tagname);
 
+  /** @domName getElementsByName */
   NodeList $dom_getElementsByName(String elementName);
 
+  /** @domName getElementsByTagName */
   NodeList $dom_getElementsByTagName(String tagname);
 
   bool queryCommandEnabled(String command);
@@ -26442,8 +26521,10 @@ interface Document extends HtmlElement {
 
   String queryCommandValue(String command);
 
+  /** @domName querySelector */
   Element query(String selectors);
 
+  /** @domName querySelectorAll */
   NodeList $dom_querySelectorAll(String selectors);
 
   void webkitCancelFullScreen();
@@ -26571,8 +26652,10 @@ interface DocumentFragment extends Element default _DocumentFragmentFactoryProvi
 
   ElementEvents get on();
 
+  /** @domName querySelector */
   Element query(String selectors);
 
+  /** @domName querySelectorAll */
   NodeList $dom_querySelectorAll(String selectors);
 
 }
@@ -26716,26 +26799,36 @@ interface Element extends Node, NodeSelector default _ElementFactoryProvider {
 
   static final int ALLOW_KEYBOARD_INPUT = 1;
 
+  /** @domName childElementCount */
   final int $dom_childElementCount;
 
+  /** @domName children */
   final HTMLCollection $dom_children;
 
+  /** @domName className */
   String $dom_className;
 
+  /** @domName clientHeight */
   final int $dom_clientHeight;
 
+  /** @domName clientLeft */
   final int $dom_clientLeft;
 
+  /** @domName clientTop */
   final int $dom_clientTop;
 
+  /** @domName clientWidth */
   final int $dom_clientWidth;
 
   String contentEditable;
+
+  final Map<String, String> dataset;
 
   String dir;
 
   bool draggable;
 
+  /** @domName firstElementChild */
   final Element $dom_firstElementChild;
 
   bool hidden;
@@ -26748,30 +26841,39 @@ interface Element extends Node, NodeSelector default _ElementFactoryProvider {
 
   String lang;
 
+  /** @domName lastElementChild */
   final Element $dom_lastElementChild;
 
   final Element nextElementSibling;
 
+  /** @domName offsetHeight */
   final int $dom_offsetHeight;
 
+  /** @domName offsetLeft */
   final int $dom_offsetLeft;
 
   final Element offsetParent;
 
+  /** @domName offsetTop */
   final int $dom_offsetTop;
 
+  /** @domName offsetWidth */
   final int $dom_offsetWidth;
 
   final String outerHTML;
 
   final Element previousElementSibling;
 
+  /** @domName scrollHeight */
   final int $dom_scrollHeight;
 
+  /** @domName scrollLeft */
   int $dom_scrollLeft;
 
+  /** @domName scrollTop */
   int $dom_scrollTop;
 
+  /** @domName scrollWidth */
   final int $dom_scrollWidth;
 
   bool spellcheck;
@@ -26796,16 +26898,22 @@ interface Element extends Node, NodeSelector default _ElementFactoryProvider {
 
   void focus();
 
+  /** @domName getAttribute */
   String $dom_getAttribute(String name);
 
+  /** @domName getBoundingClientRect */
   ClientRect $dom_getBoundingClientRect();
 
+  /** @domName getClientRects */
   ClientRectList $dom_getClientRects();
 
+  /** @domName getElementsByClassName */
   NodeList $dom_getElementsByClassName(String name);
 
+  /** @domName getElementsByTagName */
   NodeList $dom_getElementsByTagName(String name);
 
+  /** @domName hasAttribute */
   bool $dom_hasAttribute(String name);
 
   Element insertAdjacentElement(String where, Element element);
@@ -26814,20 +26922,26 @@ interface Element extends Node, NodeSelector default _ElementFactoryProvider {
 
   void insertAdjacentText(String where, String text);
 
+  /** @domName querySelector */
   Element query(String selectors);
 
+  /** @domName querySelectorAll */
   NodeList $dom_querySelectorAll(String selectors);
 
+  /** @domName removeAttribute */
   void $dom_removeAttribute(String name);
 
   void scrollByLines(int lines);
 
   void scrollByPages(int pages);
 
+  /** @domName scrollIntoViewIfNeeded */
   void scrollIntoView([bool centerIfNeeded]);
 
+  /** @domName setAttribute */
   void $dom_setAttribute(String name, String value);
 
+  /** @domName webkitMatchesSelector */
   bool matchesSelector(String selectors);
 
   void webkitRequestFullScreen(int flags);
@@ -26923,6 +27037,8 @@ interface ElementEvents extends Events {
   EventListenerList get touchCancel();
 
   EventListenerList get touchEnd();
+
+  EventListenerList get touchEnter();
 
   EventListenerList get touchLeave();
 
@@ -27205,6 +27321,7 @@ interface Event default _EventFactoryProvider {
 
   final String type;
 
+  /** @domName initEvent */
   void $dom_initEvent(String eventTypeArg, bool canBubbleArg, bool cancelableArg);
 
   void preventDefault();
@@ -27257,12 +27374,15 @@ interface EventSource extends EventTarget default _EventSourceFactoryProvider {
 
   final String url;
 
+  /** @domName addEventListener */
   void $dom_addEventListener(String type, EventListener listener, [bool useCapture]);
 
   void close();
 
+  /** @domName dispatchEvent */
   bool $dom_dispatchEvent(Event evt);
 
+  /** @domName removeEventListener */
   void $dom_removeEventListener(String type, EventListener listener, [bool useCapture]);
 }
 
@@ -27296,10 +27416,13 @@ interface EventTarget {
 
   final Events on;
 
+  /** @domName addEventListener */
   void $dom_addEventListener(String type, EventListener listener, [bool useCapture]);
 
+  /** @domName dispatchEvent */
   bool $dom_dispatchEvent(Event event);
 
+  /** @domName removeEventListener */
   void $dom_removeEventListener(String type, EventListener listener, [bool useCapture]);
 
 }
@@ -27310,6 +27433,8 @@ interface EventTarget {
 // WARNING: Do not edit - generated code.
 
 interface FieldSetElement extends Element {
+
+  bool disabled;
 
   final FormElement form;
 
@@ -27897,18 +28022,6 @@ interface HeadingElement extends Element {
 
 // WARNING: Do not edit - generated code.
 
-interface HighPass2FilterNode extends AudioNode {
-
-  final AudioParam cutoff;
-
-  final AudioParam resonance;
-}
-// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
-// for details. All rights reserved. Use of this source code is governed by a
-// BSD-style license that can be found in the LICENSE file.
-
-// WARNING: Do not edit - generated code.
-
 interface History {
 
   final int length;
@@ -28016,18 +28129,6 @@ interface IDBDatabase {
   IDBVersionChangeRequest setVersion(String version);
 
   IDBTransaction transaction(var storeName_OR_storeNames, [int mode]);
-}
-// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
-// for details. All rights reserved. Use of this source code is governed by a
-// BSD-style license that can be found in the LICENSE file.
-
-// WARNING: Do not edit - generated code.
-
-interface IDBDatabaseError {
-
-  int code;
-
-  String message;
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -28302,6 +28403,8 @@ interface IFrameElement extends Element {
   String scrolling;
 
   String src;
+
+  String srcdoc;
 
   String width;
 
@@ -28797,18 +28900,6 @@ interface Location {
 
 // WARNING: Do not edit - generated code.
 
-interface LowPass2FilterNode extends AudioNode {
-
-  final AudioParam cutoff;
-
-  final AudioParam resonance;
-}
-// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
-// for details. All rights reserved. Use of this source code is governed by a
-// BSD-style license that can be found in the LICENSE file.
-
-// WARNING: Do not edit - generated code.
-
 interface MapElement extends Element {
 
   final HTMLCollection areas;
@@ -29229,14 +29320,17 @@ interface MessagePort extends EventTarget {
 
   MessagePortEvents get on();
 
+  /** @domName addEventListener */
   void $dom_addEventListener(String type, EventListener listener, [bool useCapture]);
 
   void close();
 
+  /** @domName dispatchEvent */
   bool $dom_dispatchEvent(Event evt);
 
   void postMessage(String message, [List messagePorts]);
 
+  /** @domName removeEventListener */
   void $dom_removeEventListener(String type, EventListener listener, [bool useCapture]);
 
   void start();
@@ -29365,7 +29459,16 @@ interface MouseEvent extends UIEvent default _MouseEventFactoryProvider {
 
   final int y;
 
+  /** @domName initMouseEvent */
   void $dom_initMouseEvent(String type, bool canBubble, bool cancelable, Window view, int detail, int screenX, int screenY, int clientX, int clientY, bool ctrlKey, bool altKey, bool shiftKey, bool metaKey, int button, EventTarget relatedTarget);
+}
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
+// for details. All rights reserved. Use of this source code is governed by a
+// BSD-style license that can be found in the LICENSE file.
+
+// WARNING: Do not edit - generated code.
+
+interface MutationCallback {
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -29392,6 +29495,32 @@ interface MutationEvent extends Event {
   final Node relatedNode;
 
   void initMutationEvent(String type, bool canBubble, bool cancelable, Node relatedNode, String prevValue, String newValue, String attrName, int attrChange);
+}
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
+// for details. All rights reserved. Use of this source code is governed by a
+// BSD-style license that can be found in the LICENSE file.
+
+// WARNING: Do not edit - generated code.
+
+interface MutationRecord {
+
+  final NodeList addedNodes;
+
+  final String attributeName;
+
+  final String attributeNamespace;
+
+  final Node nextSibling;
+
+  final String oldValue;
+
+  final Node previousSibling;
+
+  final NodeList removedNodes;
+
+  final Node target;
+
+  final String type;
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -29541,28 +29670,40 @@ interface Node extends EventTarget {
 
   static final int TEXT_NODE = 3;
 
+  /** @domName attributes */
   final NamedNodeMap $dom_attributes;
 
+  /** @domName childNodes */
   final NodeList $dom_childNodes;
 
+  /** @domName firstChild */
   final Node $dom_firstChild;
 
+  /** @domName lastChild */
   final Node $dom_lastChild;
 
+  /** @domName nextSibling */
   final Node nextNode;
 
+  /** @domName nodeType */
   final int $dom_nodeType;
 
+  /** @domName ownerDocument */
   final Document document;
 
+  /** @domName parentNode */
   final Node parent;
 
+  /** @domName previousSibling */
   final Node previousNode;
 
+  /** @domName textContent */
   String text;
 
+  /** @domName appendChild */
   Node $dom_appendChild(Node newChild);
 
+  /** @domName cloneNode */
   Node clone(bool deep);
 
   bool contains(Node other);
@@ -29571,8 +29712,10 @@ interface Node extends EventTarget {
 
   Node insertBefore(Node newChild, Node refChild);
 
+  /** @domName removeChild */
   Node $dom_removeChild(Node oldChild);
 
+  /** @domName replaceChild */
   Node $dom_replaceChild(Node newChild, Node oldChild);
 
 }
@@ -29674,8 +29817,10 @@ interface NodeSelector {
   // ElementList queryAll(String selectors);
 
 
+  /** @domName querySelector */
   Element query(String selectors);
 
+  /** @domName querySelectorAll */
   NodeList $dom_querySelectorAll(String selectors);
 
 }
@@ -29703,9 +29848,9 @@ interface Notification extends EventTarget {
 
   String dir;
 
-  String replaceId;
+  String tag;
 
-  void cancel();
+  void close();
 
   void show();
 }
@@ -29905,6 +30050,32 @@ interface OptionElement extends Element default _OptionElementFactoryProvider {
   bool selected;
 
   String value;
+}
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
+// for details. All rights reserved. Use of this source code is governed by a
+// BSD-style license that can be found in the LICENSE file.
+
+// WARNING: Do not edit - generated code.
+
+interface Oscillator extends AudioSourceNode {
+
+  static final int CUSTOM = 4;
+
+  static final int SAWTOOTH = 2;
+
+  static final int SINE = 0;
+
+  static final int SQUARE = 1;
+
+  static final int TRIANGLE = 3;
+
+  final AudioParam detune;
+
+  final AudioParam frequency;
+
+  int type;
+
+  void setWaveTable(WaveTable waveTable);
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -30966,6 +31137,7 @@ interface SVGDocument extends Document {
 
   final SVGSVGElement rootElement;
 
+  /** @domName createEvent */
   Event $dom_createEvent(String eventType);
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
@@ -31015,10 +31187,13 @@ interface SVGElementInstance extends EventTarget {
 
   final SVGElementInstance previousSibling;
 
+  /** @domName addEventListener */
   void $dom_addEventListener(String type, EventListener listener, [bool useCapture]);
 
+  /** @domName dispatchEvent */
   bool $dom_dispatchEvent(Event event);
 
+  /** @domName removeEventListener */
   void $dom_removeEventListener(String type, EventListener listener, [bool useCapture]);
 }
 
@@ -32872,6 +33047,7 @@ interface SVGStringList {
 
 interface SVGStylable {
 
+  /** @domName className */
   final SVGAnimatedString $dom_svgClassName;
 
   final CSSStyleDeclaration style;
@@ -33673,16 +33849,22 @@ interface SpeechRecognitionResultList {
 
 interface Storage extends Map<String, String> {
 
+  /** @domName length */
   final int $dom_length;
 
+  /** @domName clear */
   void $dom_clear();
 
+  /** @domName getItem */
   String $dom_getItem(String key);
 
+  /** @domName key */
   String $dom_key(int index);
 
+  /** @domName removeItem */
   void $dom_removeItem(String key);
 
+  /** @domName setItem */
   void $dom_setItem(String key, String data);
 
 }
@@ -34589,6 +34771,14 @@ interface WaveShaperNode extends AudioNode {
 
 // WARNING: Do not edit - generated code.
 
+interface WaveTable {
+}
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
+// for details. All rights reserved. Use of this source code is governed by a
+// BSD-style license that can be found in the LICENSE file.
+
+// WARNING: Do not edit - generated code.
+
 interface WebGLActiveInfo {
 
   final String name;
@@ -35451,6 +35641,8 @@ interface WebGLRenderingContext extends CanvasRenderingContext {
 
   Object getShaderParameter(WebGLShader shader, int pname);
 
+  WebGLShaderPrecisionFormat getShaderPrecisionFormat(int shadertype, int precisiontype);
+
   String getShaderSource(WebGLShader shader);
 
   Object getTexParameter(int target, int pname);
@@ -35597,6 +35789,20 @@ interface WebGLShader {
 
 // WARNING: Do not edit - generated code.
 
+interface WebGLShaderPrecisionFormat {
+
+  final int precision;
+
+  final int rangeMax;
+
+  final int rangeMin;
+}
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
+// for details. All rights reserved. Use of this source code is governed by a
+// BSD-style license that can be found in the LICENSE file.
+
+// WARNING: Do not edit - generated code.
+
 interface WebGLTexture {
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
@@ -35624,6 +35830,16 @@ interface WebGLVertexArrayObjectOES {
 interface WebKitCSSRegionRule extends CSSRule {
 
   final CSSRuleList cssRules;
+}
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
+// for details. All rights reserved. Use of this source code is governed by a
+// BSD-style license that can be found in the LICENSE file.
+
+// WARNING: Do not edit - generated code.
+
+interface WebKitMutationObserver {
+
+  void disconnect();
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -35671,12 +35887,15 @@ interface WebSocket extends EventTarget default _WebSocketFactoryProvider {
 
   final String url;
 
+  /** @domName addEventListener */
   void $dom_addEventListener(String type, EventListener listener, [bool useCapture]);
 
   void close([int code, String reason]);
 
+  /** @domName dispatchEvent */
   bool $dom_dispatchEvent(Event evt);
 
+  /** @domName removeEventListener */
   void $dom_removeEventListener(String type, EventListener listener, [bool useCapture]);
 
   bool send(String data);
@@ -35856,6 +36075,7 @@ interface Window extends EventTarget {
 
   final Window window;
 
+  /** @domName addEventListener */
   void $dom_addEventListener(String type, EventListener listener, [bool useCapture]);
 
   void alert(String message);
@@ -35876,12 +36096,14 @@ interface Window extends EventTarget {
 
   bool confirm(String message);
 
+  /** @domName dispatchEvent */
   bool $dom_dispatchEvent(Event evt);
 
   bool find(String string, bool caseSensitive, bool backwards, bool wrap, bool wholeWord, bool searchInFrames, bool showDialog);
 
   void focus();
 
+  /** @domName getComputedStyle */
   CSSStyleDeclaration $dom_getComputedStyle(Element element, String pseudoElement);
 
   CSSRuleList getMatchedCSSRules(Element element, String pseudoElement);
@@ -35906,6 +36128,7 @@ interface Window extends EventTarget {
 
   void releaseEvents();
 
+  /** @domName removeEventListener */
   void $dom_removeEventListener(String type, EventListener listener, [bool useCapture]);
 
   void resizeBy(num x, num y);
@@ -36264,8 +36487,10 @@ interface XMLHttpRequest extends EventTarget default _XMLHttpRequestFactoryProvi
 
   void abort();
 
+  /** @domName addEventListener */
   void $dom_addEventListener(String type, EventListener listener, [bool useCapture]);
 
+  /** @domName dispatchEvent */
   bool $dom_dispatchEvent(Event evt);
 
   String getAllResponseHeaders();
@@ -36276,6 +36501,7 @@ interface XMLHttpRequest extends EventTarget default _XMLHttpRequestFactoryProvi
 
   void overrideMimeType(String override);
 
+  /** @domName removeEventListener */
   void $dom_removeEventListener(String type, EventListener listener, [bool useCapture]);
 
   void send([var data]);
@@ -36341,10 +36567,13 @@ interface XMLHttpRequestUpload extends EventTarget {
 
   XMLHttpRequestUploadEvents get on();
 
+  /** @domName addEventListener */
   void $dom_addEventListener(String type, EventListener listener, [bool useCapture]);
 
+  /** @domName dispatchEvent */
   bool $dom_dispatchEvent(Event evt);
 
+  /** @domName removeEventListener */
   void $dom_removeEventListener(String type, EventListener listener, [bool useCapture]);
 }
 
@@ -37352,25 +37581,25 @@ class _TypedArrayFactoryProvider {
   static Uint32Array _U32(arg) => _wrap(new dom.Uint32Array(arg));
   static Uint8ClampedArray _U8C(arg) => _wrap(new dom.Uint8ClampedArray(arg));
 
-  static Float32Array _F32_2(arg1, arg2) => _wrap(new dom.Float32Array(arg1, arg2));
-  static Float64Array _F64_2(arg1, arg2) => _wrap(new dom.Float64Array(arg1, arg2));
-  static Int8Array _I8_2(arg1, arg2) => _wrap(new dom.Int8Array(arg1, arg2));
-  static Int16Array _I16_2(arg1, arg2) => _wrap(new dom.Int16Array(arg1, arg2));
-  static Int32Array _I32_2(arg1, arg2) => _wrap(new dom.Int32Array(arg1, arg2));
-  static Uint8Array _U8_2(arg1, arg2) => _wrap(new dom.Uint8Array(arg1, arg2));
-  static Uint16Array _U16_2(arg1, arg2) => _wrap(new dom.Uint16Array(arg1, arg2));
-  static Uint32Array _U32_2(arg1, arg2) => _wrap(new dom.Uint32Array(arg1, arg2));
-  static Uint8ClampedArray _U8C_2(arg1, arg2) => _wrap(new dom.Uint8ClampedArray(arg1, arg2));
+  static Float32Array _F32_2(buffer, byteOffset) => _wrap(new dom.Float32Array.fromBuffer(_unwrap(buffer), byteOffset));
+  static Float64Array _F64_2(buffer, byteOffset) => _wrap(new dom.Float64Array.fromBuffer(_unwrap(buffer), byteOffset));
+  static Int8Array _I8_2(buffer, byteOffset) => _wrap(new dom.Int8Array.fromBuffer(_unwrap(buffer), byteOffset));
+  static Int16Array _I16_2(buffer, byteOffset) => _wrap(new dom.Int16Array.fromBuffer(_unwrap(buffer), byteOffset));
+  static Int32Array _I32_2(buffer, byteOffset) => _wrap(new dom.Int32Array.fromBuffer(_unwrap(buffer), byteOffset));
+  static Uint8Array _U8_2(buffer, byteOffset) => _wrap(new dom.Uint8Array.fromBuffer(_unwrap(buffer), byteOffset));
+  static Uint16Array _U16_2(buffer, byteOffset) => _wrap(new dom.Uint16Array.fromBuffer(_unwrap(buffer), byteOffset));
+  static Uint32Array _U32_2(buffer, byteOffset) => _wrap(new dom.Uint32Array.fromBuffer(_unwrap(buffer), byteOffset));
+  static Uint8ClampedArray _U8C_2(buffer, byteOffset) => _wrap(new dom.Uint8ClampedArray.fromBuffer(_unwrap(buffer), byteOffset));
 
-  static Float32Array _F32_3(arg1, arg2, arg3) => _wrap(new dom.Float32Array(arg1, arg2, arg3));
-  static Float64Array _F64_3(arg1, arg2, arg3) => _wrap(new dom.Float64Array(arg1, arg2, arg3));
-  static Int8Array _I8_3(arg1, arg2, arg3) => _wrap(new dom.Int8Array(arg1, arg2, arg3));
-  static Int16Array _I16_3(arg1, arg2, arg3) => _wrap(new dom.Int16Array(arg1, arg2, arg3));
-  static Int32Array _I32_3(arg1, arg2, arg3) => _wrap(new dom.Int32Array(arg1, arg2, arg3));
-  static Uint8Array _U8_3(arg1, arg2, arg3) => _wrap(new dom.Uint8Array(arg1, arg2, arg3));
-  static Uint16Array _U16_3(arg1, arg2, arg3) => _wrap(new dom.Uint16Array(arg1, arg2, arg3));
-  static Uint32Array _U32_3(arg1, arg2, arg3) => _wrap(new dom.Uint32Array(arg1, arg2, arg3));
-  static Uint8ClampedArray _U8C_3(arg1, arg2, arg3) => _wrap(new dom.Uint8ClampedArray(arg1, arg2, arg3));
+  static Float32Array _F32_3(buffer, byteOffset, length) => _wrap(new dom.Float32Array.fromBuffer(_unwrap(buffer), byteOffset, length));
+  static Float64Array _F64_3(buffer, byteOffset, length) => _wrap(new dom.Float64Array.fromBuffer(_unwrap(buffer), byteOffset, length));
+  static Int8Array _I8_3(buffer, byteOffset, length) => _wrap(new dom.Int8Array.fromBuffer(_unwrap(buffer), byteOffset, length));
+  static Int16Array _I16_3(buffer, byteOffset, length) => _wrap(new dom.Int16Array.fromBuffer(_unwrap(buffer), byteOffset, length));
+  static Int32Array _I32_3(buffer, byteOffset, length) => _wrap(new dom.Int32Array.fromBuffer(_unwrap(buffer), byteOffset, length));
+  static Uint8Array _U8_3(buffer, byteOffset, length) => _wrap(new dom.Uint8Array.fromBuffer(_unwrap(buffer), byteOffset, length));
+  static Uint16Array _U16_3(buffer, byteOffset, length) => _wrap(new dom.Uint16Array.fromBuffer(_unwrap(buffer), byteOffset, length));
+  static Uint32Array _U32_3(buffer, byteOffset, length) => _wrap(new dom.Uint32Array.fromBuffer(_unwrap(buffer), byteOffset, length));
+  static Uint8ClampedArray _U8C_3(buffer, byteOffset, length) => _wrap(new dom.Uint8ClampedArray.fromBuffer(_unwrap(buffer), byteOffset, length));
 
   static ensureNative(List list) => list;  // TODO: make sure.
 }

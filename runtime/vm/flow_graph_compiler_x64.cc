@@ -556,7 +556,10 @@ void FlowGraphCompiler::GenerateInstanceOf(intptr_t node_id,
   __ PushObject(Object::ZoneHandle());  // Make room for the result.
   const Immediate location =
       Immediate(reinterpret_cast<int64_t>(Smi::New(token_index)));
+  const Immediate node_id_as_smi =
+      Immediate(reinterpret_cast<int64_t>(Smi::New(node_id)));
   __ pushq(location);  // Push the source location.
+  __ pushq(node_id_as_smi);
   __ pushq(RAX);  // Push the instance.
   __ PushObject(type);  // Push the type.
   if (!type.IsInstantiated()) {
@@ -567,7 +570,7 @@ void FlowGraphCompiler::GenerateInstanceOf(intptr_t node_id,
   GenerateCallRuntime(node_id, token_index, kInstanceofRuntimeEntry);
   // Pop the two parameters supplied to the runtime entry. The result of the
   // instanceof runtime call will be left as the result of the operation.
-  __ addq(RSP, Immediate(4 * kWordSize));
+  __ addq(RSP, Immediate(5 * kWordSize));
   if (negate_result) {
     Label negate_done;
     __ popq(RDX);
@@ -635,7 +638,6 @@ void FlowGraphCompiler::VisitCreateClosure(CreateClosureComp* comp) {
 
   const Class& cls = Class::Handle(function.signature_class());
   if (cls.HasTypeArguments()) {
-    UNIMPLEMENTED();  // We should have bailed out.
     __ popq(RCX);  // Discard type arguments.
   }
   if (function.IsImplicitInstanceClosureFunction()) {
@@ -811,6 +813,18 @@ void FlowGraphCompiler::VisitChainContext(ChainContextComp* comp) {
                      CTX);
   // Set new context as current context.
   __ movq(CTX, RAX);
+}
+
+
+void FlowGraphCompiler::VisitCloneContext(CloneContextComp* comp) {
+  __ popq(RAX);  // Get context value from stack.
+  __ PushObject(Object::ZoneHandle());  // Make room for the result.
+  __ pushq(RAX);
+  GenerateCallRuntime(comp->node_id(),
+                      comp->token_index(),
+                      kCloneContextRuntimeEntry);
+  __ popq(RAX);  // Remove argument.
+  __ popq(RAX);  // Get result (cloned context).
 }
 
 

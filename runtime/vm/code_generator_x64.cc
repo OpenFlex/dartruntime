@@ -30,12 +30,6 @@ DECLARE_FLAG(bool, trace_compiler);
 
 #define __ assembler_->
 
-
-// TODO(regis): CodeGeneratorState, CodeGenerator::DescriptorList, and
-// CodeGenerator::HandlerList can probably be moved to code_generator.cc, since
-// they seem to be architecture independent.
-
-
 CodeGeneratorState::CodeGeneratorState(CodeGenerator* codegen)
     : StackResource(Isolate::Current()),
       codegen_(codegen),
@@ -56,54 +50,6 @@ CodeGeneratorState::~CodeGeneratorState() {
 }
 
 
-class CodeGenerator::HandlerList : public ZoneAllocated {
- public:
-  struct HandlerDesc {
-    intptr_t try_index;  // Try block index handled by the handler.
-    intptr_t pc_offset;  // Handler PC offset value.
-  };
-
-  HandlerList() : list_() {
-  }
-  ~HandlerList() { }
-
-  intptr_t Length() const {
-    return list_.length();
-  }
-
-  intptr_t TryIndex(int index) const {
-    return list_[index].try_index;
-  }
-  intptr_t PcOffset(int index) const {
-    return list_[index].pc_offset;
-  }
-  void SetPcOffset(int index, intptr_t handler_pc) {
-    list_[index].pc_offset = handler_pc;
-  }
-
-  void AddHandler(intptr_t try_index, intptr_t pc_offset) {
-    struct HandlerDesc data;
-    data.try_index = try_index;
-    data.pc_offset = pc_offset;
-    list_.Add(data);
-  }
-
-  RawExceptionHandlers* FinalizeExceptionHandlers(uword entry_point) {
-    intptr_t num_handlers = Length();
-    const ExceptionHandlers& handlers =
-        ExceptionHandlers::Handle(ExceptionHandlers::New(num_handlers));
-    for (intptr_t i = 0; i < num_handlers; i++) {
-      handlers.SetHandlerEntry(i, TryIndex(i), (entry_point + PcOffset(i)));
-    }
-    return handlers.raw();
-  }
-
- private:
-  GrowableArray<struct HandlerDesc> list_;
-  DISALLOW_COPY_AND_ASSIGN(HandlerList);
-};
-
-
 CodeGenerator::CodeGenerator(Assembler* assembler,
                              const ParsedFunction& parsed_function)
     : assembler_(assembler),
@@ -120,7 +66,7 @@ CodeGenerator::CodeGenerator(Assembler* assembler,
   ASSERT(Isolate::Current()->long_jump_base()->IsSafeToJump());
   pc_descriptors_list_ = new DescriptorList();
   // We do not build any stack maps in the unoptimizing compiler.
-  exception_handlers_list_ = new CodeGenerator::HandlerList();
+  exception_handlers_list_ = new ExceptionHandlerList();
 }
 
 
@@ -902,12 +848,8 @@ void CodeGenerator::VisitSequenceNode(SequenceNode* node_sequence) {
   // taken care of unchaining the context.
   if (node_sequence->label() != NULL) {
     __ Bind(node_sequence->label()->break_label());
-
-    // The context saved on entry must be restored.
-    if ((node_sequence == parsed_function_.node_sequence()) &&
-        (parsed_function_.saved_context_var() != NULL)) {
-      GenerateLoadVariable(CTX, *parsed_function_.saved_context_var());
-    }
+    // Outermost sequence cannot have a label.
+    ASSERT(node_sequence != parsed_function_.node_sequence());
   }
   set_context_level(previous_context_level);
 }
@@ -1403,7 +1345,10 @@ void CodeGenerator::GenerateInstanceOf(intptr_t node_id,
   __ PushObject(Object::ZoneHandle());  // Make room for the result.
   const Immediate location =
       Immediate(reinterpret_cast<int64_t>(Smi::New(token_index)));
+  const Immediate node_id_as_smi =
+      Immediate(reinterpret_cast<int64_t>(Smi::New(node_id)));
   __ pushq(location);  // Push the source location.
+  __ pushq(node_id_as_smi);
   __ pushq(RAX);  // Push the instance.
   __ PushObject(type);  // Push the type.
   if (!type.IsInstantiated()) {
@@ -1414,7 +1359,7 @@ void CodeGenerator::GenerateInstanceOf(intptr_t node_id,
   GenerateCallRuntime(node_id, token_index, kInstanceofRuntimeEntry);
   // Pop the two parameters supplied to the runtime entry. The result of the
   // instanceof runtime call will be left as the result of the operation.
-  __ addq(RSP, Immediate(4 * kWordSize));
+  __ addq(RSP, Immediate(5 * kWordSize));
   if (negate_result) {
     Label negate_done;
     __ popq(RDX);
