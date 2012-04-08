@@ -152,6 +152,7 @@ namespace dart {
   V(isolate_getPortInternal, 0)                                                \
   V(isolate_spawnFunction, 1)                                                  \
   V(Mirrors_send, 3)                                                           \
+  V(Mirrors_caller, 2)                                                         \
 
 
 BOOTSTRAP_NATIVE_LIST(DECLARE_NATIVE_ENTRY)

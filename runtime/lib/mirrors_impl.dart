@@ -24,6 +24,17 @@ class _IsolateMirrorImpl implements IsolateMirror {
   }
 }
 
+class _CallerMirrorImpl implements CallerMirror {
+  final String functionName;
+  final String outerFunctionName;
+  final String className;
+  final String libraryName;
+  final String scriptUrl;
+
+  _CallerMirrorImpl(this.functionName, this.outerFunctionName, this.className,
+      this.libraryName, this.scriptUrl);
+}
+
 class _Mirrors {
   static Future<IsolateMirror> isolateMirrorOf(SendPort port) {
     Completer<IsolateMirror> completer = new Completer<IsolateMirror>();
@@ -39,6 +50,29 @@ class _Mirrors {
       });
     return completer.future;
   }
+
+  static CallerMirror caller(int level) {
+    if (level < 0) {
+      throw new IllegalArgumentException("Level must be >= 0");
+    }
+    // when walking, the Dart stack looks like:
+    // - (dart:mirrors) _Mirrors.nativeCaller
+    // - (dart:mirrors) _Mirrors.caller
+    // - (dart:mirrors) caller
+    // - the calling method itself
+    // that's why +4
+    level += 4;
+    var result = new Map<String, String>();
+    nativeCaller(level, result);
+    if (result["function"] == null) {
+      return null;
+    }
+    return new _CallerMirrorImpl(result["function"], result["outer_function"],
+        result["class"], result["library"], result["script"]);
+  }
+
+  static void nativeCaller(int level, Map<String, String> result)
+      native "Mirrors_caller";
 
   static void processCommand(var message, SendPort replyTo) {
     Map response = new Map();

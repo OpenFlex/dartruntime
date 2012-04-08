@@ -16,3 +16,15 @@ interface IsolateMirror {
 Future<IsolateMirror> isolateMirrorOf(SendPort port) {
   return _Mirrors.isolateMirrorOf(port);
 }
+
+interface CallerMirror {
+  final String functionName;
+  final String outerFunctionName;
+  final String className;
+  final String libraryName;
+  final String scriptUrl;
+}
+
+CallerMirror caller([int level = 1]) {
+  return _Mirrors.caller(level);
+}
