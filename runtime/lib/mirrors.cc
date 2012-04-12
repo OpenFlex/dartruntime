@@ -92,7 +92,7 @@ DEFINE_NATIVE_ENTRY(Mirrors_caller, 2) {
   if (caller.IsLocalFunction()) {
     Function& outer_function = Function::Handle(caller.parent_function());
     while (outer_function.IsLocalFunction()) {
-      outer_function ^= outer_function.parent_function();
+      outer_function = outer_function.parent_function();
     }
     PUT_TO_MAP_AND_CHECK(outer_function, outer_function.name())
   }
