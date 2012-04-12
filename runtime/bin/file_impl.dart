@@ -217,12 +217,13 @@ class _FileUtils {
   static final kSetPositionRequest = 8;
   static final kTruncateRequest = 9;
   static final kLengthRequest = 10;
-  static final kFlushRequest = 11;
-  static final kReadByteRequest = 12;
-  static final kWriteByteRequest = 13;
-  static final kReadListRequest = 14;
-  static final kWriteListRequest = 15;
-  static final kWriteStringRequest = 16;
+  static final kLengthFromNameRequest = 11;
+  static final kFlushRequest = 12;
+  static final kReadByteRequest = 13;
+  static final kWriteByteRequest = 14;
+  static final kReadListRequest = 15;
+  static final kWriteListRequest = 16;
+  static final kWriteStringRequest = 17;
 
   static final kSuccessResponse = 0;
   static final kIllegalArgumentResponse = 1;
@@ -265,6 +266,7 @@ class _FileUtils {
   static delete(String name) native "File_Delete";
   static fullPath(String name) native "File_FullPath";
   static directory(String name) native "File_Directory";
+  static lengthFromName(String name) native "File_LengthFromName";
   static int close(int id) native "File_Close";
   static readByte(int id) native "File_ReadByte";
   static readList(int id, List<int> buffer, int offset, int bytes)
@@ -354,6 +356,17 @@ class _FileUtils {
     return result;
   }
 
+  static int checkedLengthFromName(String name) {
+    if (name is !String) {
+      throw new IllegalArgumentException();
+    }
+    var result = lengthFromName(name);
+    if (result is OSError) {
+      throw new FileIOException("Cannot retrieve length of file", result);
+    }
+    return result;
+  }
+
   static int checkReadWriteListArguments(int length, int offset, int bytes) {
     if (offset < 0) return offset;
     if (bytes < 0) return bytes;
@@ -400,14 +413,6 @@ class _FileBase {
     _onError = handler;
   }
 
-  _checkNotAsync() {
-    if (_asyncUsed) {
-      throw new FileIOException(
-          "Mixed use of synchronous and asynchronous API");
-    }
-  }
-
-  bool _asyncUsed = false;
   Function _onError;
 }
 
@@ -418,7 +423,6 @@ class _File extends _FileBase implements File {
 
   void exists(void callback(bool exists)) {
     _ensureFileService();
-    _asyncUsed = true;
     List request = new List(2);
     request[0] = _FileUtils.kExistsRequest;
     request[1] = _name;
@@ -432,13 +436,11 @@ class _File extends _FileBase implements File {
   }
 
   bool existsSync() {
-    _checkNotAsync();
     return _FileUtils.checkedExists(_name);
   }
 
   void create(void callback()) {
     _ensureFileService();
-    _asyncUsed = true;
     List request = new List(2);
     request[0] = _FileUtils.kCreateRequest;
     request[1] = _name;
@@ -452,7 +454,6 @@ class _File extends _FileBase implements File {
   }
 
   void createSync() {
-    _checkNotAsync();
     bool created = _FileUtils.checkedCreate(_name);
     if (!created) {
       throw new FileIOException("Cannot create file: $_name");
@@ -461,7 +462,6 @@ class _File extends _FileBase implements File {
 
   void delete(void callback()) {
     _ensureFileService();
-    _asyncUsed = true;
     List request = new List(2);
     request[0] = _FileUtils.kDeleteRequest;
     request[1] = _name;
@@ -475,13 +475,11 @@ class _File extends _FileBase implements File {
   }
 
   void deleteSync() {
-    _checkNotAsync();
     _FileUtils.checkedDelete(_name);
   }
 
   void directory(void callback(Directory dir)) {
     _ensureFileService();
-    _asyncUsed = true;
     List request = new List(2);
     request[0] = _FileUtils.kDirectoryRequest;
     request[1] = _name;
@@ -495,14 +493,12 @@ class _File extends _FileBase implements File {
   }
 
   Directory directorySync() {
-    _checkNotAsync();
     _FileUtils.checkedDirectory(_name);
     return new Directory(_FileUtils.directory(_name));
   }
 
   void open(FileMode mode, void callback(RandomAccessFile file)) {
     _ensureFileService();
-    _asyncUsed = true;
     if (mode != FileMode.READ &&
         mode != FileMode.WRITE &&
         mode != FileMode.APPEND) {
@@ -524,8 +520,29 @@ class _File extends _FileBase implements File {
     });
   }
 
+  void length(void callback(int length)) {
+    _ensureFileService();
+    List request = new List(2);
+    request[0] = _FileUtils.kLengthFromNameRequest;
+    request[1] = _name;
+    _fileService.call(request).then((response) {
+      if (_isErrorResponse(response)) {
+        _reportError(response, "Cannot retrieve length of file");
+      } else {
+        callback(response);
+      }
+    });
+  }
+
+  int lengthSync() {
+    var result = _FileUtils.checkedLengthFromName(_name);
+    if (result is OSError) {
+      throw new FileIOException("Cannot retrieve length of file", result);
+    }
+    return result;
+  }
+
   RandomAccessFile openSync([FileMode mode = FileMode.READ]) {
-    _checkNotAsync();
     if (mode != FileMode.READ &&
         mode != FileMode.WRITE &&
         mode != FileMode.APPEND) {
@@ -547,7 +564,6 @@ class _File extends _FileBase implements File {
 
   void fullPath(void callback(String result)) {
     _ensureFileService();
-    _asyncUsed = true;
     List request = new List(2);
     request[0] = _FileUtils.kFullPathRequest;
     request[1] = _name;
@@ -561,7 +577,6 @@ class _File extends _FileBase implements File {
   }
 
   String fullPathSync() {
-    _checkNotAsync();
     return _FileUtils.checkedFullPath(_name);
   }
 
@@ -580,7 +595,6 @@ class _File extends _FileBase implements File {
 
   void readAsBytes(void callback(List<int> bytes)) {
     _ensureFileService();
-    _asyncUsed = true;
     var chunks = new _BufferList();
     var stream = openInputStream();
     stream.onClosed = () {
@@ -598,7 +612,6 @@ class _File extends _FileBase implements File {
   }
 
   List<int> readAsBytesSync() {
-    _checkNotAsync();
     var opened = openSync();
     var length = opened.lengthSync();
     var result = new ByteArray(length);
@@ -612,7 +625,6 @@ class _File extends _FileBase implements File {
 
   void readAsText(Encoding encoding, void callback(String text)) {
     _ensureFileService();
-    _asyncUsed = true;
     var decoder = _StringDecoders.decoder(encoding);
     readAsBytes((bytes) {
       try {
@@ -628,7 +640,6 @@ class _File extends _FileBase implements File {
   }
 
   String readAsTextSync([Encoding encoding = Encoding.UTF_8]) {
-    _checkNotAsync();
     var decoder = _StringDecoders.decoder(encoding);
     List<int> bytes = readAsBytesSync();
     decoder.write(bytes);
@@ -653,7 +664,6 @@ class _File extends _FileBase implements File {
 
   void readAsLines(Encoding encoding, void callback(List<String> lines)) {
     _ensureFileService();
-    _asyncUsed = true;
     var decoder = _StringDecoders.decoder(encoding);
     readAsBytes((bytes) {
       try {
@@ -669,7 +679,6 @@ class _File extends _FileBase implements File {
   }
 
   List<String> readAsLinesSync([Encoding encoding = Encoding.UTF_8]) {
-    _checkNotAsync();
     var decoder = _StringDecoders.decoder(encoding);
     List<int> bytes = readAsBytesSync();
     decoder.write(bytes);
@@ -696,7 +705,6 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
   void close(void callback()) {
     if (_id == 0) return;
     _ensureFileService();
-    _asyncUsed = true;
     List request = new List(2);
     request[0] = _FileUtils.kCloseRequest;
     request[1] = _id;
@@ -714,7 +722,6 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
   }
 
   void closeSync() {
-    _checkNotAsync();
     var id = _FileUtils.close(_id);
     if (id == -1) {
       throw new FileIOException("Cannot close file: $_name");
@@ -724,7 +731,6 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
 
   void readByte(void callback(int byte)) {
     _ensureFileService();
-    _asyncUsed = true;
     List request = new List(2);
     request[0] = _FileUtils.kReadByteRequest;
     request[1] = _id;
@@ -738,7 +744,7 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
   }
 
   int readByteSync() {
-    _checkNotAsyncAndNotClosed();
+    _checkNotClosed();
     var result = _FileUtils.readByte(_id);
     if (result is OSError) {
       throw new FileIOException("readByte failed", result);
@@ -749,7 +755,6 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
   void readList(List<int> buffer, int offset, int bytes,
                 void callback(int read)) {
     _ensureFileService();
-    _asyncUsed = true;
     if (buffer is !List || offset is !int || bytes is !int) {
       if (_onError != null) {
         _onError("Invalid arguments to readList");
@@ -773,7 +778,7 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
   }
 
   int readListSync(List<int> buffer, int offset, int bytes) {
-    _checkNotAsyncAndNotClosed();
+    _checkNotClosed();
     if (buffer is !List || offset is !int || bytes is !int) {
       throw new FileIOException("Invalid arguments to readList");
     }
@@ -792,7 +797,6 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
 
   void writeByte(int value) {
     _ensureFileService();
-    _asyncUsed = true;
     if (value is !int) {
       if (_onError != null) {
         _onError("Invalid argument to writeByte");
@@ -813,7 +817,7 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
   }
 
   int writeByteSync(int value) {
-    _checkNotAsyncAndNotClosed();
+    _checkNotClosed();
     if (value is !int) {
       throw new FileIOException("Invalid argument to writeByte");
     }
@@ -826,7 +830,6 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
 
   void writeList(List<int> buffer, int offset, int bytes) {
     _ensureFileService();
-    _asyncUsed = true;
     if (buffer is !List || offset is !int || bytes is !int) {
       if (_onError != null) {
         _onError("Invalid arguments to writeList");
@@ -855,7 +858,7 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
   }
 
   int writeListSync(List<int> buffer, int offset, int bytes) {
-    _checkNotAsyncAndNotClosed();
+    _checkNotClosed();
     if (buffer is !List || offset is !int || bytes is !int) {
       throw new FileIOException("Invalid arguments to writeList");
     }
@@ -874,7 +877,6 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
 
   void writeString(String string, [Encoding encoding = Encoding.UTF_8]) {
     _ensureFileService();
-    _asyncUsed = true;
     List request = new List(3);
     request[0] = _FileUtils.kWriteStringRequest;
     request[1] = _id;
@@ -889,7 +891,7 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
   }
 
   int writeStringSync(String string, [Encoding encoding = Encoding.UTF_8]) {
-    _checkNotAsyncAndNotClosed();
+    _checkNotClosed();
     var result = _FileUtils.checkedWriteString(_id, string);
     if (result is OSError) {
       throw new FileIOException("writeString failed", result);
@@ -899,7 +901,6 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
 
   void position(void callback(int position)) {
     _ensureFileService();
-    _asyncUsed = true;
     List request = new List(2);
     request[0] = _FileUtils.kPositionRequest;
     request[1] = _id;
@@ -913,7 +914,7 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
   }
 
   int positionSync() {
-    _checkNotAsyncAndNotClosed();
+    _checkNotClosed();
     var result = _FileUtils.position(_id);
     if (result is OSError) {
       throw new FileIOException("position failed", result);
@@ -923,7 +924,6 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
 
   void setPosition(int position, void callback()) {
     _ensureFileService();
-    _asyncUsed = true;
     List request = new List(3);
     request[0] = _FileUtils.kSetPositionRequest;
     request[1] = _id;
@@ -938,7 +938,7 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
   }
 
   void setPositionSync(int position) {
-    _checkNotAsyncAndNotClosed();
+    _checkNotClosed();
     var result = _FileUtils.setPosition(_id, position);
     if (result is OSError) {
       throw new FileIOException("setPosition failed", result);
@@ -947,7 +947,6 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
 
   void truncate(int length, void callback()) {
     _ensureFileService();
-    _asyncUsed = true;
     List request = new List(3);
     request[0] = _FileUtils.kTruncateRequest;
     request[1] = _id;
@@ -962,7 +961,7 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
   }
 
   void truncateSync(int length) {
-    _checkNotAsyncAndNotClosed();
+    _checkNotClosed();
     var result = _FileUtils.truncate(_id, length);
     if (result is OSError) {
       throw new FileIOException("truncate failed", result);
@@ -971,7 +970,6 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
 
   void length(void callback(int length)) {
     _ensureFileService();
-    _asyncUsed = true;
     List request = new List(2);
     request[0] = _FileUtils.kLengthRequest;
     request[1] = _id;
@@ -985,7 +983,7 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
   }
 
   int lengthSync() {
-    _checkNotAsyncAndNotClosed();
+    _checkNotClosed();
     var result = _FileUtils.length(_id);
     if (result is OSError) {
       throw new FileIOException("length failed", result);
@@ -995,7 +993,6 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
 
   void flush(void callback()) {
     _ensureFileService();
-    _asyncUsed = true;
     List request = new List(2);
     request[0] = _FileUtils.kFlushRequest;
     request[1] = _id;
@@ -1009,7 +1006,7 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
   }
 
   void flushSync() {
-    _checkNotAsyncAndNotClosed();
+    _checkNotClosed();
     var result = _FileUtils.flush(_id);
     if (result is OSError) {
       throw new FileIOException("flush failed", result);
@@ -1048,8 +1045,7 @@ class _RandomAccessFile extends _FileBase implements RandomAccessFile {
     }
   }
 
-  _checkNotAsyncAndNotClosed() {
-    _checkNotAsync();
+  void _checkNotClosed() {
     if (_id == 0) {
       throw new FileIOException("File closed");
     }

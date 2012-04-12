@@ -6,50 +6,23 @@
 import database
 import databasebuilder
 import idlparser
-import os.path
 import logging.config
+import os.path
+import tempfile
 import sys
 
-
-def main():
+def build_database(idl_list_file_name, database_dir):
   """This code reconstructs the FremontCut IDL database from W3C,
   WebKit and Dart IDL files."""
   current_dir = os.path.dirname(__file__)
   logging.config.fileConfig(os.path.join(current_dir, "logging.conf"))
 
-  db = database.Database(os.path.join(current_dir, '..', 'database'))
+  db = database.Database(database_dir)
 
   # Delete all existing IDLs in the DB.
   db.Delete()
 
   builder = databasebuilder.DatabaseBuilder(db)
-
-  # Import WebKit IDL files:
-  webkit_dirs = [
-      'Modules/speech',
-      'Modules/indexeddb',
-      'css',
-      'dom',
-      'fileapi',
-      'Modules/filesystem',
-      'html',
-      'html/canvas',
-      'inspector',
-      'loader',
-      'loader/appcache',
-      'Modules/mediastream',
-      'Modules/geolocation',
-      'notifications',
-      'page',
-      'plugins',
-      'storage',
-      'Modules/webdatabase',
-      'svg',
-      'Modules/webaudio',
-      'Modules/websockets',
-      'workers',
-      'xml',
-      ]
 
   # TODO(vsm): Move this to a README.
   # This is the Dart SVN revision.
@@ -65,6 +38,7 @@ def main():
       'ENABLE_3D_PLUGIN',
       'ENABLE_3D_RENDERING',
       'ENABLE_ACCELERATED_2D_CANVAS',
+      'ENABLE_BATTERY_STATUS',
       'ENABLE_BLOB',
       'ENABLE_BLOB_SLICE',
       'ENABLE_CHANNEL_MESSAGING',
@@ -128,19 +102,13 @@ def main():
       source='WebKit',
       source_attributes={'revision': webkit_revision},
       type_rename_map={
-        # Some of these are typos in the IDL.
-        'float': 'double',
         'BarInfo': 'BarProp',
         'DedicatedWorkerContext': 'DedicatedWorkerGlobalScope',
         'DOMApplicationCache': 'ApplicationCache',
         'DOMCoreException': 'DOMException',
-        'DOMExceptionJSC': 'DOMException', # Node.replaceChild
-        'DomException': 'DOMException',    # Navigator.registerProtocolHandler
         'DOMFormData': 'FormData',
-        'DOMObject': 'object',
         'DOMSelection': 'Selection',
         'DOMWindow': 'Window',
-        'Exception': 'DOMException',     # NotificationCenter.createNotification
         'SharedWorkerContext': 'SharedWorkerGlobalScope',
         'WorkerContext': 'WorkerGlobalScope',
       })
@@ -150,18 +118,13 @@ def main():
       ('IDBDatabase', 'transaction', 'mode'),
       ]
 
-  # Assume Dartium checkout.
-  webcore_path = os.path.join(current_dir, '..', '..', '..', '..',
-                              'third_party', 'WebKit', 'Source', 'WebCore')
-
-  if not os.path.exists(webcore_path):
-    # Fall back to standard Dart checkout.
-    webcore_path = os.path.join(current_dir, '..', '..', '..',
-                                'third_party', 'WebCore')
-
-  for dir_name in webkit_dirs:
-    dir_path = os.path.join(webcore_path, dir_name)
-    builder.import_idl_directory(dir_path, webkit_options)
+  # Import WebKit IDLs.
+  idl_list_file = open(idl_list_file_name, 'r')
+  for file_name in idl_list_file:
+    file_name = file_name.strip()
+    idl_file_name = os.path.join(os.path.dirname(idl_list_file_name), file_name)
+    builder.import_idl_file(idl_file_name, webkit_options)
+  idl_list_file.close()
 
   webkit_supplemental_options = databasebuilder.DatabaseBuilderOptions(
     idl_syntax=idlparser.FREMONTCUT_SYNTAX,
@@ -195,6 +158,59 @@ def main():
   builder.normalize_annotations(['WebKit', 'Dart'])
 
   db.Save()
+
+def main():
+  current_dir = os.path.dirname(__file__)
+
+  webkit_dirs = [
+    'Modules/speech',
+    'Modules/indexeddb',
+    'css',
+    'dom',
+    'fileapi',
+    'Modules/filesystem',
+    'html',
+    'html/canvas',
+    'inspector',
+    'loader',
+    'loader/appcache',
+    'Modules/mediastream',
+    'Modules/geolocation',
+    'notifications',
+    'page',
+    'plugins',
+    'storage',
+    'Modules/webdatabase',
+    'svg',
+    'Modules/webaudio',
+    'Modules/websockets',
+    'workers',
+    'xml',
+    ]
+
+  (idl_list_file, idl_list_file_name) = tempfile.mkstemp()
+
+  webcore_dir = os.path.join(current_dir, '..', '..', '..',
+                             'third_party', 'WebCore')
+  if not os.path.exists(webcore_dir):
+    raise RuntimeError('directory not found: %s' % webcore_dir)
+
+  def visitor(arg, dir_name, names):
+    for name in names:
+      file_name = os.path.join(dir_name, name)
+      (interface, ext) = os.path.splitext(file_name)
+      if ext == '.idl' and not name.startswith('._'):
+        path = os.path.relpath(file_name, os.path.dirname(idl_list_file_name))
+        os.write(idl_list_file, '%s\n' % path)
+
+  for dir_name in webkit_dirs:
+    dir_path = os.path.join(webcore_dir, dir_name)
+    os.path.walk(dir_path, visitor, None)
+
+  os.close(idl_list_file)
+
+  database_dir = os.path.join(current_dir, '..', 'database')
+  return build_database(idl_list_file_name, database_dir)
 
 if __name__ == '__main__':
   sys.exit(main())
