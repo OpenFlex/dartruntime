@@ -85,17 +85,7 @@ def GenerateDOM(systems, generate_html_systems, output_dir,
     common_database.LoadFromCache()
   else:
     common_database.Load()
-  # Remove these types since they are mapped directly to dart.
-  common_database.DeleteInterface('DOMStringMap')
-  common_database.DeleteInterface('DOMStringList')
 
-  generator.RenameTypes(common_database, {
-      # W3C -> Dart renames
-      'AbstractView': 'Window',
-      'Function': 'EventListener',
-      'DOMStringMap': 'Map<String, String>',
-      'DOMStringList': 'List<String>',
-      }, False)
   generator.FilterMembersWithUnidentifiedTypes(common_database)
   webkit_database = common_database.Clone()
 
@@ -104,11 +94,11 @@ def GenerateDOM(systems, generate_html_systems, output_dir,
                              or_annotations = ['WebKit', 'Dart'],
                              exclude_displaced = ['WebKit'],
                              exclude_suppressed = ['WebKit', 'Dart'])
-  generator.RenameTypes(webkit_database, _webkit_renames, False)
+  generator.RenameTypes(webkit_database, _webkit_renames, True)
 
   if generate_html_systems:
     html_renames = _MakeHtmlRenames(common_database)
-    generator.RenameTypes(webkit_database, html_renames, True)
+    generator.RenameTypes(webkit_database, html_renames, False)
     html_renames_inverse = dict((v,k) for k, v in html_renames.iteritems())
   else:
     html_renames_inverse = {}
