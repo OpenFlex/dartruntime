@@ -2156,6 +2156,25 @@ bool AbstractType::IsSubtypeOf(const AbstractType& other,
                                Error* malformed_error) const {
   ASSERT(IsFinalized());
   ASSERT(other.IsFinalized());
+  // In case the type checked in a type test is malformed, the code generator
+  // may compile a throw instead of a run time call performing the type check.
+  // However, in checked mode, a function type may include malformed result type
+  // and/or malformed parameter types, which will then be encountered here at
+  // run time.
+  if (IsMalformed()) {
+    ASSERT(FLAG_enable_type_checks);
+    if (malformed_error->IsNull()) {
+      *malformed_error = this->malformed_error();
+    }
+    return false;
+  }
+  if (other.IsMalformed()) {
+    ASSERT(FLAG_enable_type_checks);
+    if (malformed_error->IsNull()) {
+      *malformed_error = other.malformed_error();
+    }
+    return false;
+  }
   // AbstractType parameters cannot be handled by Class::IsSubtypeOf().
   if (IsTypeParameter() || other.IsTypeParameter()) {
     // An uninstantiated type parameter is equivalent to Dynamic.
@@ -4687,6 +4706,35 @@ static bool ShouldBePrivate(const String& name) {
 }
 
 
+RawField* Library::LookupFieldAllowPrivate(const String& name) const {
+  // First check if name is found in the local scope of the library.
+  Field& field = Field::Handle(LookupLocalField(name));
+  if (!field.IsNull()) {
+    return field.raw();
+  }
+
+  // Do not look up private names in imported libraries.
+  if (ShouldBePrivate(name)) {
+    return Field::null();
+  }
+
+  // Now check if name is found in the top level scope of any imported
+  // libs.
+  const Array& imports = Array::Handle(this->imports());
+  Library& import_lib = Library::Handle();
+  for (intptr_t j = 0; j < this->num_imports(); j++) {
+    import_lib ^= imports.At(j);
+
+
+    field = import_lib.LookupLocalField(name);
+    if (!field.IsNull()) {
+      return field.raw();
+    }
+  }
+  return Field::null();
+}
+
+
 RawField* Library::LookupLocalField(const String& name) const {
   Isolate* isolate = Isolate::Current();
   Field& field = Field::Handle(isolate, Field::null());
@@ -4705,6 +4753,35 @@ RawField* Library::LookupLocalField(const String& name) const {
 
   // No field found.
   return Field::null();
+}
+
+
+RawFunction* Library::LookupFunctionAllowPrivate(const String& name) const {
+  // First check if name is found in the local scope of the library.
+  Function& function = Function::Handle(LookupLocalFunction(name));
+  if (!function.IsNull()) {
+    return function.raw();
+  }
+
+  // Do not look up private names in imported libraries.
+  if (ShouldBePrivate(name)) {
+    return Function::null();
+  }
+
+  // Now check if name is found in the top level scope of any imported
+  // libs.
+  const Array& imports = Array::Handle(this->imports());
+  Library& import_lib = Library::Handle();
+  for (intptr_t j = 0; j < this->num_imports(); j++) {
+    import_lib ^= imports.At(j);
+
+
+    function = import_lib.LookupLocalFunction(name);
+    if (!function.IsNull()) {
+      return function.raw();
+    }
+  }
+  return Function::null();
 }
 
 
@@ -6126,12 +6203,12 @@ const char* ICData::ToCString() const {
 
 
 void ICData::set_function(const Function& value) const {
-  raw_ptr()->function_ = value.raw();
+  StorePointer(&raw_ptr()->function_, value.raw());
 }
 
 
 void ICData::set_target_name(const String& value) const {
-  raw_ptr()->target_name_ = value.raw();
+  StorePointer(&raw_ptr()->target_name_, value.raw());
 }
 
 
@@ -6146,7 +6223,7 @@ void ICData::set_num_args_tested(intptr_t value) const {
 
 
 void ICData::set_ic_data(const Array& value) const {
-  raw_ptr()->ic_data_ = value.raw();
+  StorePointer(&raw_ptr()->ic_data_, value.raw());
 }
 
 
@@ -6505,6 +6582,7 @@ bool Instance::IsInstanceOf(const AbstractType& other,
   ASSERT(other.IsFinalized());
   ASSERT(!other.IsDynamicType());
   ASSERT(!other.IsVoidType());
+  ASSERT(!other.IsMalformed());
   if (IsNull()) {
     Class& other_class = Class::Handle();
     if (other.IsTypeParameter()) {
@@ -8541,6 +8619,7 @@ RawArray* Array::MakeArray(const GrowableObjectArray& growable_array) {
       // space as an Array object.
       RawArray* raw = reinterpret_cast<RawArray*>(RawObject::FromAddr(addr));
       raw->ptr()->class_ = isolate->object_store()->array_class();
+      tags = 0;
       tags = RawObject::SizeTag::update(leftover_size, tags);
       raw->ptr()->tags_ = tags;
       intptr_t leftover_len =
@@ -8552,6 +8631,7 @@ RawArray* Array::MakeArray(const GrowableObjectArray& growable_array) {
       ASSERT(leftover_size == Object::InstanceSize());
       RawObject* raw = reinterpret_cast<RawObject*>(RawObject::FromAddr(addr));
       raw->ptr()->class_ = isolate->object_store()->object_class();
+      tags = 0;
       tags = RawObject::SizeTag::update(leftover_size, tags);
       raw->ptr()->tags_ = tags;
     }
@@ -8599,9 +8679,10 @@ void GrowableObjectArray::Add(const Object& value, Heap::Space space) const {
 
 void GrowableObjectArray::Grow(intptr_t new_capacity, Heap::Space space) const {
   ASSERT(new_capacity > Capacity());
-  Array& contents = Array::Handle(data());
-  StorePointer(&(raw_ptr()->data_),
-               Array::Grow(contents, new_capacity, space));
+  const Array& contents = Array::Handle(data());
+  const Array& new_contents =
+      Array::Handle(Array::Grow(contents, new_capacity, space));
+  StorePointer(&(raw_ptr()->data_), new_contents.raw());
 }
 
 

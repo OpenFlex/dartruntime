@@ -275,6 +275,23 @@ class _BarInfoJs extends _DOMTypeJs implements BarInfo native "*BarInfo" {
   final bool visible;
 }
 
+class _BatteryManagerJs extends _EventTargetJs implements BatteryManager native "*BatteryManager" {
+
+  final bool charging;
+
+  final num chargingTime;
+
+  final num dischargingTime;
+
+  final num level;
+
+  void addEventListener(String type, EventListener listener, [bool useCapture = null]) native;
+
+  bool dispatchEvent(_EventJs evt) native;
+
+  void removeEventListener(String type, EventListener listener, [bool useCapture = null]) native;
+}
+
 class _BeforeLoadEventJs extends _EventJs implements BeforeLoadEvent native "*BeforeLoadEvent" {
 
   final String url;
@@ -3473,13 +3490,19 @@ class _HTMLMediaElementJs extends _HTMLElementJs implements HTMLMediaElement nat
 
   _TextTrackJs addTextTrack(String kind, [String label = null, String language = null]) native;
 
-  String canPlayType(String type) native;
+  String canPlayType(String type, String keySystem) native;
 
   void load() native;
 
   void pause() native;
 
   void play() native;
+
+  void webkitAddKey(String keySystem, _Uint8ArrayJs key, [_Uint8ArrayJs initData = null, String sessionId = null]) native;
+
+  void webkitCancelKeyRequest(String keySystem, String sessionId) native;
+
+  void webkitGenerateKeyRequest(String keySystem, [_Uint8ArrayJs initData = null]) native;
 
   void webkitSourceAddId(String id, String type) native;
 
@@ -4230,14 +4253,6 @@ class _IDBKeyRangeJs extends _DOMTypeJs implements IDBKeyRange native "*IDBKeyRa
   final upper;
 
   final bool upperOpen;
-
-  _IDBKeyRangeJs bound(lower, upper, [bool lowerOpen = null, bool upperOpen = null]) native;
-
-  _IDBKeyRangeJs lowerBound(bound, [bool open = null]) native;
-
-  _IDBKeyRangeJs only(value) native;
-
-  _IDBKeyRangeJs upperBound(bound, [bool open = null]) native;
 }
 
 class _IDBObjectStoreJs extends _DOMTypeJs implements IDBObjectStore native "*IDBObjectStore" {
@@ -4769,11 +4784,47 @@ class _MediaErrorJs extends _DOMTypeJs implements MediaError native "*MediaError
 
   static final int MEDIA_ERR_DECODE = 3;
 
+  static final int MEDIA_ERR_ENCRYPTED = 5;
+
   static final int MEDIA_ERR_NETWORK = 2;
 
   static final int MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
 
   final int code;
+}
+
+class _MediaKeyErrorJs extends _DOMTypeJs implements MediaKeyError native "*MediaKeyError" {
+
+  static final int MEDIA_KEYERR_CLIENT = 2;
+
+  static final int MEDIA_KEYERR_DOMAIN = 6;
+
+  static final int MEDIA_KEYERR_HARDWARECHANGE = 5;
+
+  static final int MEDIA_KEYERR_OUTPUT = 4;
+
+  static final int MEDIA_KEYERR_SERVICE = 3;
+
+  static final int MEDIA_KEYERR_UNKNOWN = 1;
+
+  final int code;
+}
+
+class _MediaKeyEventJs extends _EventJs implements MediaKeyEvent native "*MediaKeyEvent" {
+
+  final String defaultURL;
+
+  final _MediaKeyErrorJs errorCode;
+
+  final _Uint8ArrayJs initData;
+
+  final String keySystem;
+
+  final _Uint8ArrayJs message;
+
+  final String sessionId;
+
+  final int systemCode;
 }
 
 class _MediaListJs extends _DOMTypeJs implements MediaList native "*MediaList" {
@@ -5213,6 +5264,8 @@ class _NavigatorJs extends _DOMTypeJs implements Navigator native "*Navigator" {
   final String vendor;
 
   final String vendorSub;
+
+  final _BatteryManagerJs webkitBattery;
 
   final _PointerLockJs webkitPointer;
 
@@ -12469,6 +12522,28 @@ interface BarInfo extends BarProp {
 
 // WARNING: Do not edit - generated code.
 
+interface BatteryManager extends EventTarget {
+
+  final bool charging;
+
+  final num chargingTime;
+
+  final num dischargingTime;
+
+  final num level;
+
+  void addEventListener(String type, EventListener listener, [bool useCapture]);
+
+  bool dispatchEvent(Event evt);
+
+  void removeEventListener(String type, EventListener listener, [bool useCapture]);
+}
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
+// for details. All rights reserved. Use of this source code is governed by a
+// BSD-style license that can be found in the LICENSE file.
+
+// WARNING: Do not edit - generated code.
+
 interface BeforeLoadEvent extends Event {
 
   final String url;
@@ -16099,13 +16174,19 @@ interface HTMLMediaElement extends HTMLElement {
 
   TextTrack addTextTrack(String kind, [String label, String language]);
 
-  String canPlayType(String type);
+  String canPlayType(String type, String keySystem);
 
   void load();
 
   void pause();
 
   void play();
+
+  void webkitAddKey(String keySystem, Uint8Array key, [Uint8Array initData, String sessionId]);
+
+  void webkitCancelKeyRequest(String keySystem, String sessionId);
+
+  void webkitGenerateKeyRequest(String keySystem, [Uint8Array initData]);
 
   void webkitSourceAddId(String id, String type);
 
@@ -17063,7 +17144,17 @@ interface IDBKey {
 
 // WARNING: Do not edit - generated code.
 
-interface IDBKeyRange {
+interface IDBKeyRange default _IDBKeyRangeFactoryProvider {
+
+  IDBKeyRange.only(/*IDBKey*/ value);
+
+  IDBKeyRange.lowerBound(/*IDBKey*/ bound, [bool open]);
+
+  IDBKeyRange.upperBound(/*IDBKey*/ bound, [bool open]);
+
+  IDBKeyRange.bound(/*IDBKey*/ lower, /*IDBKey*/ upper,
+                    [bool lowerOpen, bool upperOpen]);
+
 
   final /*IDBKey*/ lower;
 
@@ -17072,14 +17163,6 @@ interface IDBKeyRange {
   final /*IDBKey*/ upper;
 
   final bool upperOpen;
-
-  IDBKeyRange bound(/*IDBKey*/ lower, /*IDBKey*/ upper, [bool lowerOpen, bool upperOpen]);
-
-  IDBKeyRange lowerBound(/*IDBKey*/ bound, [bool open]);
-
-  IDBKeyRange only(/*IDBKey*/ value);
-
-  IDBKeyRange upperBound(/*IDBKey*/ bound, [bool open]);
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -17474,11 +17557,57 @@ interface MediaError {
 
   static final int MEDIA_ERR_DECODE = 3;
 
+  static final int MEDIA_ERR_ENCRYPTED = 5;
+
   static final int MEDIA_ERR_NETWORK = 2;
 
   static final int MEDIA_ERR_SRC_NOT_SUPPORTED = 4;
 
   final int code;
+}
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
+// for details. All rights reserved. Use of this source code is governed by a
+// BSD-style license that can be found in the LICENSE file.
+
+// WARNING: Do not edit - generated code.
+
+interface MediaKeyError {
+
+  static final int MEDIA_KEYERR_CLIENT = 2;
+
+  static final int MEDIA_KEYERR_DOMAIN = 6;
+
+  static final int MEDIA_KEYERR_HARDWARECHANGE = 5;
+
+  static final int MEDIA_KEYERR_OUTPUT = 4;
+
+  static final int MEDIA_KEYERR_SERVICE = 3;
+
+  static final int MEDIA_KEYERR_UNKNOWN = 1;
+
+  final int code;
+}
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
+// for details. All rights reserved. Use of this source code is governed by a
+// BSD-style license that can be found in the LICENSE file.
+
+// WARNING: Do not edit - generated code.
+
+interface MediaKeyEvent extends Event {
+
+  final String defaultURL;
+
+  final MediaKeyError errorCode;
+
+  final Uint8Array initData;
+
+  final String keySystem;
+
+  final Uint8Array message;
+
+  final String sessionId;
+
+  final int systemCode;
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -17860,6 +17989,8 @@ interface Navigator {
   final String vendor;
 
   final String vendorSub;
+
+  final BatteryManager webkitBattery;
 
   final PointerLock webkitPointer;
 
@@ -24657,58 +24788,6 @@ interface ReadyState {
    */
   static final String COMPLETE = "complete";
 }
-// Copyright (c) 2011, the Dart project authors.  Please see the AUTHORS file
-// for details. All rights reserved. Use of this source code is governed by a
-// BSD-style license that can be found in the LICENSE file.
-
-/**
- * The [Collections] class implements static methods useful when
- * writing a class that implements [Collection] and the [iterator]
- * method.
- */
-class _Collections {
-  static void forEach(Iterable<Object> iterable, void f(Object o)) {
-    for (final e in iterable) {
-      f(e);
-    }
-  }
-
-  static List map(Iterable<Object> source,
-                  List<Object> destination,
-                  f(o)) {
-    for (final e in source) {
-      destination.add(f(e));
-    }
-    return destination;
-  }
-
-  static bool some(Iterable<Object> iterable, bool f(Object o)) {
-    for (final e in iterable) {
-      if (f(e)) return true;
-    }
-    return false;
-  }
-
-  static bool every(Iterable<Object> iterable, bool f(Object o)) {
-    for (final e in iterable) {
-      if (!f(e)) return false;
-    }
-    return true;
-  }
-
-  static List filter(Iterable<Object> source,
-                     List<Object> destination,
-                     bool f(o)) {
-    for (final e in source) {
-      if (f(e)) destination.add(e);
-    }
-    return destination;
-  }
-
-  static bool isEmpty(Iterable<Object> iterable) {
-    return !iterable.iterator().hasNext();
-  }
-}
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
@@ -24800,6 +24879,53 @@ class _WebKitPointFactoryProvider {
 class _WebSocketFactoryProvider {
 
   factory WebSocket(String url) native '''return new WebSocket(url);''';
+}
+// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
+// for details. All rights reserved. Use of this source code is governed by a
+// BSD-style license that can be found in the LICENSE file.
+
+class _IDBKeyRangeFactoryProvider {
+
+  factory IDBKeyRange.only(/*IDBKey*/ value) =>
+      _only(_class(), _translateKey(value));
+
+  factory IDBKeyRange.lowerBound(/*IDBKey*/ bound, [bool open = false]) =>
+      _lowerBound(_class(), _translateKey(bound), open);
+
+  factory IDBKeyRange.upperBound(/*IDBKey*/ bound, [bool open = false]) =>
+      _upperBound(_class(), _translateKey(bound), open);
+
+  factory IDBKeyRange.bound(/*IDBKey*/ lower, /*IDBKey*/ upper,
+                            [bool lowerOpen = false, bool upperOpen = false]) =>
+      _bound(_class(), _translateKey(lower), _translateKey(upper),
+             lowerOpen, upperOpen);
+
+  static var _cachedClass;
+
+  static _class() {
+    if (_cachedClass != null) return _cachedClass;
+    return _cachedClass = _uncachedClass();
+  }
+
+  static _uncachedClass() native '''
+      return window.webkitIDBKeyRange || window.mozIDBKeyRange ||
+             window.msIDBKeyRange || window.IDBKeyRange;
+  ''';
+
+  static _translateKey(idbkey) => idbkey;  // TODO: fixme.
+
+  static _IDBKeyRangeJs _only(cls, value) native
+      '''return cls.only(value);''';
+
+  static _IDBKeyRangeJs _lowerBound(cls, bound, open) native
+      '''return cls.lowerBound(bound, open);''';
+
+  static _IDBKeyRangeJs _upperBound(cls, bound, open) native
+      '''return cls.upperBound(bound, open);''';
+
+  static _IDBKeyRangeJs _bound(cls, lower, upper, lowerOpen, upperOpen) native
+      '''return cls.bound(lower, upper, lowerOpen, upperOpen);''';
+
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -24913,6 +25039,58 @@ class _TypedArrayFactoryProvider {
   // Ensures that [list] is a JavaScript Array or a typed array.  If necessary,
   // copies the list.
   static ensureNative(List list) => list;  // TODO: make sure.
+}
+// Copyright (c) 2011, the Dart project authors.  Please see the AUTHORS file
+// for details. All rights reserved. Use of this source code is governed by a
+// BSD-style license that can be found in the LICENSE file.
+
+/**
+ * The [Collections] class implements static methods useful when
+ * writing a class that implements [Collection] and the [iterator]
+ * method.
+ */
+class _Collections {
+  static void forEach(Iterable<Object> iterable, void f(Object o)) {
+    for (final e in iterable) {
+      f(e);
+    }
+  }
+
+  static List map(Iterable<Object> source,
+                  List<Object> destination,
+                  f(o)) {
+    for (final e in source) {
+      destination.add(f(e));
+    }
+    return destination;
+  }
+
+  static bool some(Iterable<Object> iterable, bool f(Object o)) {
+    for (final e in iterable) {
+      if (f(e)) return true;
+    }
+    return false;
+  }
+
+  static bool every(Iterable<Object> iterable, bool f(Object o)) {
+    for (final e in iterable) {
+      if (!f(e)) return false;
+    }
+    return true;
+  }
+
+  static List filter(Iterable<Object> source,
+                     List<Object> destination,
+                     bool f(o)) {
+    for (final e in source) {
+      if (f(e)) destination.add(e);
+    }
+    return destination;
+  }
+
+  static bool isEmpty(Iterable<Object> iterable) {
+    return !iterable.iterator().hasNext();
+  }
 }
 // Copyright (c) 2011, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a

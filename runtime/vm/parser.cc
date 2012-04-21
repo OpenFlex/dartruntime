@@ -112,6 +112,23 @@ static ThrowNode* GenerateRethrow(intptr_t token_pos, const Object& obj) {
 }
 
 
+void ParsedFunction::SetNodeSequence(SequenceNode* node_sequence) {
+  ASSERT(node_sequence_ == NULL);
+  ASSERT(node_sequence != NULL);
+  node_sequence_ = node_sequence;
+  const int num_fixed_params = function().num_fixed_parameters();
+  const int num_opt_params = function().num_optional_parameters();
+  // Allocated ids for parameters.
+  intptr_t parameter_id = AstNode::kNoId;
+  for (intptr_t i = 0; i < num_fixed_params + num_opt_params; i++) {
+    parameter_id = AstNode::GetNextId();
+    if (i == 0) {
+      node_sequence_->set_first_parameter_id(parameter_id);
+    }
+  }
+  node_sequence_->set_last_parameter_id(parameter_id);
+}
+
 void ParsedFunction::AllocateVariables() {
   LocalScope* scope = node_sequence()->scope();
   const int fixed_parameter_count = function().num_fixed_parameters();
@@ -666,7 +683,7 @@ void Parser::ParseFunction(ParsedFunction* parsed_function) {
     // Add implicit return node.
     node_sequence->Add(new ReturnNode(parser.token_index_));
   }
-  parsed_function->set_node_sequence(node_sequence);
+  parsed_function->SetNodeSequence(node_sequence);
 
   // The instantiator may be required at run time for generic type checks or
   // allocation of generic types.
@@ -3149,11 +3166,16 @@ RawAbstractTypeArguments* Parser::ParseTypeArguments(
     do {
       ConsumeToken();
       type = ParseType(finalization);
-      types.Add(type);
       // Only keep the error for the first malformed type argument.
       if (malformed_error->IsNull() && type.IsMalformed()) {
         *malformed_error = type.malformed_error();
       }
+      // Map a malformed type argument to Dynamic, so that malformed types with
+      // a resolved type class are handled properly in production mode.
+      if (type.IsMalformed()) {
+        type = Type::DynamicType();
+      }
+      types.Add(type);
     } while (CurrentToken() == Token::kCOMMA);
     Token::Kind token = CurrentToken();
     if ((token == Token::kGT) || (token == Token::kSHR)) {
@@ -7200,7 +7222,9 @@ RawAbstractType* Parser::ParseType(
   }
   AbstractType& type = AbstractType::Handle(
       Type::New(type_class, type_arguments, type_name.ident_pos));
-  if (!malformed_error.IsNull()) {
+  // In production mode, malformed type arguments are mapped to Dynamic.
+  // In checked mode, a type with malformed type arguments is malformed.
+  if (FLAG_enable_type_checks && !malformed_error.IsNull()) {
     Type& parameterized_type = Type::Handle();
     parameterized_type ^= type.raw();
     parameterized_type.set_type_class(Class::Handle(Object::dynamic_class()));

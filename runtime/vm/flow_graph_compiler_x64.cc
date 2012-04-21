@@ -129,7 +129,7 @@ void FlowGraphCompiler::GenerateInlineInstanceof(const AbstractType& type,
           __ CompareObject(RCX, type_class);
           __ j(EQUAL, is_instance);
         }
-        // Fall through to runtime class.
+        // Fall through to runtime call.
       }
     } else {  // type has NO type arguments.
       Label compare_classes;
@@ -295,51 +295,15 @@ void FlowGraphCompiler::GenerateInlineInstanceof(const AbstractType& type,
 void FlowGraphCompiler::GenerateAssertAssignable(intptr_t node_id,
                                                  intptr_t token_index,
                                                  intptr_t try_index,
-                                                 Value* value,
                                                  const AbstractType& dst_type,
                                                  const String& dst_name) {
   ASSERT(FLAG_enable_type_checks);
   ASSERT(token_index >= 0);
   ASSERT(!dst_type.IsNull());
   ASSERT(dst_type.IsFinalized());
-
-  // Any expression is assignable to the Dynamic type and to the Object type.
-  // Skip the test.
-  if (!dst_type.IsMalformed() &&
-      (dst_type.IsDynamicType() || dst_type.IsObjectType())) {
-    return;
-  }
-
-  // It is a compile-time error to explicitly return a value (including null)
-  // from a void function. However, functions that do not explicitly return a
-  // value, implicitly return null. This includes void functions. Therefore, we
-  // skip the type test here and trust the parser to only return null in void
-  // function.
-  if (dst_type.IsVoidType()) {
-    return;
-  }
-
-  // TODO(regis): Move this compile time check to the graph builder.
-  // Eliminate the test if it can be performed successfully at compile time.
-  if ((value != NULL) && value->IsConstant()) {
-    Instance& literal_value = Instance::Handle();
-    literal_value ^= value->AsConstant()->value().raw();
-    const Class& cls = Class::Handle(literal_value.clazz());
-    if (cls.IsNullClass()) {
-      ASSERT(literal_value.IsNull() ||
-             (literal_value.raw() == Object::sentinel()) ||
-             (literal_value.raw() == Object::transition_sentinel()));
-      return;
-    }
-    Error& malformed_error = Error::Handle();
-    if (!dst_type.IsMalformed() &&
-        dst_type.IsInstantiated() &&
-        literal_value.IsInstanceOf(dst_type,
-                                   TypeArguments::Handle(),
-                                   &malformed_error)) {
-      return;
-    }
-  }
+  ASSERT(dst_type.IsMalformed() ||
+         (!dst_type.IsDynamicType() && !dst_type.IsObjectType()));
+  ASSERT(!dst_type.IsVoidType());
 
   // A null object is always assignable and is returned as result.
   const Immediate raw_null =
@@ -378,7 +342,10 @@ void FlowGraphCompiler::GenerateAssertAssignable(intptr_t node_id,
   __ PushObject(Object::ZoneHandle());  // Make room for the result.
   const Immediate location =
       Immediate(reinterpret_cast<int64_t>(Smi::New(token_index)));
+  const Immediate node_id_as_smi =
+      Immediate(reinterpret_cast<int64_t>(Smi::New(node_id)));
   __ pushq(location);  // Push the source location.
+  __ pushq(node_id_as_smi);  // node-id.
   __ pushq(RAX);  // Push the source object.
   __ PushObject(dst_type);  // Push the type of the destination.
   if (!dst_type.IsInstantiated()) {
@@ -393,7 +360,7 @@ void FlowGraphCompiler::GenerateAssertAssignable(intptr_t node_id,
                       kTypeCheckRuntimeEntry);
   // Pop the parameters supplied to the runtime entry. The result of the
   // type check runtime call is the checked value.
-  __ addq(RSP, Immediate(5 * kWordSize));
+  __ addq(RSP, Immediate(6 * kWordSize));
   __ popq(RAX);
 
   __ Bind(&is_assignable);
@@ -427,14 +394,13 @@ void FlowGraphCompiler::VisitConstant(ConstantVal* val) {
 
 
 void FlowGraphCompiler::VisitAssertAssignable(AssertAssignableComp* comp) {
-  if (comp->type_arguments() != NULL) {
+  if (comp->instantiator_type_arguments() != NULL) {
     __ popq(RDX);
   }
   LoadValue(RAX, comp->value());
   GenerateAssertAssignable(comp->node_id(),
                            comp->token_index(),
                            comp->try_index(),
-                           comp->value(),
                            comp->dst_type(),
                            comp->dst_name());
 }
@@ -840,7 +806,6 @@ void FlowGraphCompiler::VisitBooleanNegate(BooleanNegateComp* comp) {
 void FlowGraphCompiler::GenerateInstanceOf(intptr_t node_id,
                                            intptr_t token_index,
                                            intptr_t try_index,
-                                           Value* value,
                                            const AbstractType& type,
                                            bool negate_result) {
   ASSERT(type.IsFinalized() && !type.IsMalformed());
@@ -916,7 +881,6 @@ void FlowGraphCompiler::VisitInstanceOf(InstanceOfComp* comp) {
   GenerateInstanceOf(comp->node_id(),
                      comp->token_index(),
                      comp->try_index(),
-                     comp->value(),
                      comp->type(),
                      comp->negate_result());
 }

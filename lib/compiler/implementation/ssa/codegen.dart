@@ -93,6 +93,8 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
   static final int STATE_EXPRESSION = 3;
   static final int STATE_DECLARATION = 4;
 
+  static final String TEMPORARY_PREFIX = 't';
+
   final Compiler compiler;
   final WorkItem work;
   final StringBuffer buffer;
@@ -100,6 +102,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
 
   final Map<Element, String> parameterNames;
   final Map<int, String> names;
+  final Set<String> usedNames;
   final Map<String, int> prefixes;
   final Set<HInstruction> generateAtUseSite;
   final Map<HPhi, String> logicalOperations;
@@ -142,6 +145,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
                    this.parameterNames)
     : names = new Map<int, String>(),
       prefixes = new Map<String, int>(),
+      usedNames = new Set<String>(),
       buffer = new StringBuffer(),
       generateAtUseSite = new Set<HInstruction>(),
       logicalOperations = new Map<HPhi, String>(),
@@ -152,6 +156,9 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     for (final name in parameterNames.getValues()) {
       prefixes[name] = 0;
     }
+
+    // Create a namespace for temporaries.
+    prefixes[TEMPORARY_PREFIX] = 0;
 
     equalsNullElement =
         compiler.builder.interceptors.getEqualsNullInterceptor();
@@ -272,26 +279,34 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     String name = names[id];
     if (name !== null) return name;
 
-    if (instruction is HPhi) {
-      HPhi phi = instruction;
-      Element element = phi.element;
-      String prefix;
+    String prefix = TEMPORARY_PREFIX;
+    if (instruction.sourceElement !== null) {
+      Element element = instruction.sourceElement;
       if (element !== null && !element.name.isEmpty()) {
         prefix = element.name.slowToString();
-      } else {
-        prefix = 'v';
+        // Special case the variable named [TEMPORARY_PREFIX] to allow keeping its
+        // name.
+        if (prefix == TEMPORARY_PREFIX && !usedNames.contains(prefix)) {
+          return newName(id, prefix);
+        }
+        // If we've never seen that prefix before, try to use it
+        // directly.
+        if (!prefixes.containsKey(prefix)) {
+          // Make sure the variable name does not conflict with our mangling.
+          while (usedNames.contains(prefix)) {
+            prefix = '${prefix}_';
+          }
+          prefixes[prefix] = 0;
+          return newName(id, prefix);
+        }
       }
-      if (!prefixes.containsKey(prefix)) {
-        prefixes[prefix] = 0;
-        return newName(id, prefix);
-      } else {
-        return newName(id, '${prefix}_${prefixes[prefix]++}');
-      }
-    } else {
-      String prefix = 't';
-      if (!prefixes.containsKey(prefix)) prefixes[prefix] = 0;
-      return newName(id, '${prefix}${prefixes[prefix]++}');
     }
+
+    name = '${prefix}${prefixes[prefix]++}';
+    while (usedNames.contains(name)) {
+      name = '${prefix}${prefixes[prefix]++}';
+    }
+    return newName(id, name);
   }
 
   bool temporaryExists(HInstruction instruction) {
@@ -301,6 +316,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
   String newName(int id, String name) {
     String result = JsNames.getValid(name);
     names[id] = result;
+    usedNames.add(result);
     return result;
   }
 
@@ -1007,7 +1023,13 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
       buffer.add(compiler.namer.instanceMethodInvocationName(
           currentLibrary, node.name, node.selector));
       visitArguments(node.inputs);
-      compiler.registerDynamicInvocation(node.name, node.selector);
+      if (node.element !== null) {
+        // If we know we're calling a specific method, register that
+        // method only.
+        compiler.registerDynamicInvocationOf(node.element);
+      } else {
+        compiler.registerDynamicInvocation(node.name, node.selector);
+      }
     }
     endExpression(JSPrecedence.CALL_PRECEDENCE);
   }
