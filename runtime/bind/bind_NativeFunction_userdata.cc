@@ -314,11 +314,12 @@ int main()
         return 50;
     }
 
-    result = Dart_InvokeStatic(lib,
-                                Dart_NewString("NumArray"),
-                                Dart_NewString("foo"),
-                                0,
-                                NULL);
+    Dart_Handle cls = Dart_GetClass(lib, Dart_NewString("NumArray"));
+
+    result = Dart_Invoke(cls,
+                         Dart_NewString("foo"),
+                         0,
+                         NULL);
 
     if (!checkResult(result)) {
         return 60;
