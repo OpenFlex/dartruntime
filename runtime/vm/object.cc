@@ -1535,48 +1535,47 @@ bool Class::IsSubtypeOf(
                            other_type_arguments,
                            malformed_error);
   }
-  // Check for 'direct super type' in the case of an interface and check for
-  // transitivity at the same time.
-  if (other.is_interface()) {
-    Array& interfaces = Array::Handle(this->interfaces());
-    AbstractType& interface = AbstractType::Handle();
-    Class& interface_class = Class::Handle();
-    AbstractTypeArguments& interface_args = AbstractTypeArguments::Handle();
-    for (intptr_t i = 0; i < interfaces.Length(); i++) {
-      interface ^= interfaces.At(i);
-      interface_class = interface.type_class();
-      interface_args = interface.arguments();
-      if (!interface_args.IsNull() && !interface_args.IsInstantiated()) {
-        // This type class implements an interface that is parameterized with
-        // generic type(s), e.g. it implements List<T>.
-        // The uninstantiated type T must be instantiated using the type
-        // parameters of this type before performing the type test.
-        // The type arguments of this type that are referred to by the type
-        // parameters of the interface are at the end of the type vector,
-        // after the type arguments of the super type of this type.
-        // The index of the type parameters is adjusted upon finalization.
-        ASSERT(interface.IsFinalized());
-        interface_args = interface_args.InstantiateFrom(type_arguments);
-        // In checked mode, verify that the instantiated interface type
-        // arguments are within the bounds specified by the interface class.
-        // Note that the additional bounds check in checked mode may lead to a
-        // dynamic type error, but it will never change the result of the type
-        // check from true in production mode to false in checked mode.
-        if (FLAG_enable_type_checks && !interface_args.IsNull()) {
-          // Pass type_arguments as bounds instantiator.
-          if (!interface_args.IsWithinBoundsOf(interface_class,
-                                               type_arguments,
-                                               malformed_error)) {
-            continue;
-          }
+  // Check for 'direct super type' in the case of an interface
+  // (i.e. other.is_interface()) or implicit interface (i.e.
+  // !other.is_interface()) and check for transitivity at the same time.
+  Array& interfaces = Array::Handle(this->interfaces());
+  AbstractType& interface = AbstractType::Handle();
+  Class& interface_class = Class::Handle();
+  AbstractTypeArguments& interface_args = AbstractTypeArguments::Handle();
+  for (intptr_t i = 0; i < interfaces.Length(); i++) {
+    interface ^= interfaces.At(i);
+    interface_class = interface.type_class();
+    interface_args = interface.arguments();
+    if (!interface_args.IsNull() && !interface_args.IsInstantiated()) {
+      // This type class implements an interface that is parameterized with
+      // generic type(s), e.g. it implements List<T>.
+      // The uninstantiated type T must be instantiated using the type
+      // parameters of this type before performing the type test.
+      // The type arguments of this type that are referred to by the type
+      // parameters of the interface are at the end of the type vector,
+      // after the type arguments of the super type of this type.
+      // The index of the type parameters is adjusted upon finalization.
+      ASSERT(interface.IsFinalized());
+      interface_args = interface_args.InstantiateFrom(type_arguments);
+      // In checked mode, verify that the instantiated interface type
+      // arguments are within the bounds specified by the interface class.
+      // Note that the additional bounds check in checked mode may lead to a
+      // dynamic type error, but it will never change the result of the type
+      // check from true in production mode to false in checked mode.
+      if (FLAG_enable_type_checks && !interface_args.IsNull()) {
+        // Pass type_arguments as bounds instantiator.
+        if (!interface_args.IsWithinBoundsOf(interface_class,
+                                             type_arguments,
+                                             malformed_error)) {
+          continue;
         }
       }
-      if (interface_class.IsSubtypeOf(interface_args,
-                                      other,
-                                      other_type_arguments,
-                                      malformed_error)) {
-        return true;
-      }
+    }
+    if (interface_class.IsSubtypeOf(interface_args,
+                                    other,
+                                    other_type_arguments,
+                                    malformed_error)) {
+      return true;
     }
   }
   // Check the interface case.
@@ -2157,6 +2156,25 @@ bool AbstractType::IsSubtypeOf(const AbstractType& other,
                                Error* malformed_error) const {
   ASSERT(IsFinalized());
   ASSERT(other.IsFinalized());
+  // In case the type checked in a type test is malformed, the code generator
+  // may compile a throw instead of a run time call performing the type check.
+  // However, in checked mode, a function type may include malformed result type
+  // and/or malformed parameter types, which will then be encountered here at
+  // run time.
+  if (IsMalformed()) {
+    ASSERT(FLAG_enable_type_checks);
+    if (malformed_error->IsNull()) {
+      *malformed_error = this->malformed_error();
+    }
+    return false;
+  }
+  if (other.IsMalformed()) {
+    ASSERT(FLAG_enable_type_checks);
+    if (malformed_error->IsNull()) {
+      *malformed_error = other.malformed_error();
+    }
+    return false;
+  }
   // AbstractType parameters cannot be handled by Class::IsSubtypeOf().
   if (IsTypeParameter() || other.IsTypeParameter()) {
     // An uninstantiated type parameter is equivalent to Dynamic.
@@ -4688,6 +4706,35 @@ static bool ShouldBePrivate(const String& name) {
 }
 
 
+RawField* Library::LookupFieldAllowPrivate(const String& name) const {
+  // First check if name is found in the local scope of the library.
+  Field& field = Field::Handle(LookupLocalField(name));
+  if (!field.IsNull()) {
+    return field.raw();
+  }
+
+  // Do not look up private names in imported libraries.
+  if (ShouldBePrivate(name)) {
+    return Field::null();
+  }
+
+  // Now check if name is found in the top level scope of any imported
+  // libs.
+  const Array& imports = Array::Handle(this->imports());
+  Library& import_lib = Library::Handle();
+  for (intptr_t j = 0; j < this->num_imports(); j++) {
+    import_lib ^= imports.At(j);
+
+
+    field = import_lib.LookupLocalField(name);
+    if (!field.IsNull()) {
+      return field.raw();
+    }
+  }
+  return Field::null();
+}
+
+
 RawField* Library::LookupLocalField(const String& name) const {
   Isolate* isolate = Isolate::Current();
   Field& field = Field::Handle(isolate, Field::null());
@@ -4706,6 +4753,35 @@ RawField* Library::LookupLocalField(const String& name) const {
 
   // No field found.
   return Field::null();
+}
+
+
+RawFunction* Library::LookupFunctionAllowPrivate(const String& name) const {
+  // First check if name is found in the local scope of the library.
+  Function& function = Function::Handle(LookupLocalFunction(name));
+  if (!function.IsNull()) {
+    return function.raw();
+  }
+
+  // Do not look up private names in imported libraries.
+  if (ShouldBePrivate(name)) {
+    return Function::null();
+  }
+
+  // Now check if name is found in the top level scope of any imported
+  // libs.
+  const Array& imports = Array::Handle(this->imports());
+  Library& import_lib = Library::Handle();
+  for (intptr_t j = 0; j < this->num_imports(); j++) {
+    import_lib ^= imports.At(j);
+
+
+    function = import_lib.LookupLocalFunction(name);
+    if (!function.IsNull()) {
+      return function.raw();
+    }
+  }
+  return Function::null();
 }
 
 
@@ -6127,12 +6203,12 @@ const char* ICData::ToCString() const {
 
 
 void ICData::set_function(const Function& value) const {
-  raw_ptr()->function_ = value.raw();
+  StorePointer(&raw_ptr()->function_, value.raw());
 }
 
 
 void ICData::set_target_name(const String& value) const {
-  raw_ptr()->target_name_ = value.raw();
+  StorePointer(&raw_ptr()->target_name_, value.raw());
 }
 
 
@@ -6147,7 +6223,7 @@ void ICData::set_num_args_tested(intptr_t value) const {
 
 
 void ICData::set_ic_data(const Array& value) const {
-  raw_ptr()->ic_data_ = value.raw();
+  StorePointer(&raw_ptr()->ic_data_, value.raw());
 }
 
 
@@ -6506,6 +6582,7 @@ bool Instance::IsInstanceOf(const AbstractType& other,
   ASSERT(other.IsFinalized());
   ASSERT(!other.IsDynamicType());
   ASSERT(!other.IsVoidType());
+  ASSERT(!other.IsMalformed());
   if (IsNull()) {
     Class& other_class = Class::Handle();
     if (other.IsTypeParameter()) {
@@ -6696,16 +6773,6 @@ bool Smi::Equals(const Instance& other) const {
   Smi& other_smi = Smi::Handle();
   other_smi ^= other.raw();
   return (this->Value() == other_smi.Value());
-}
-
-
-bool Smi::IsValid(intptr_t value) {
-  return (value >= kMinValue) && (value <= kMaxValue);
-}
-
-
-bool Smi::IsValid64(int64_t value) {
-  return (value >= kMinValue) && (value <= kMaxValue);
 }
 
 
@@ -8552,6 +8619,7 @@ RawArray* Array::MakeArray(const GrowableObjectArray& growable_array) {
       // space as an Array object.
       RawArray* raw = reinterpret_cast<RawArray*>(RawObject::FromAddr(addr));
       raw->ptr()->class_ = isolate->object_store()->array_class();
+      tags = 0;
       tags = RawObject::SizeTag::update(leftover_size, tags);
       raw->ptr()->tags_ = tags;
       intptr_t leftover_len =
@@ -8563,6 +8631,7 @@ RawArray* Array::MakeArray(const GrowableObjectArray& growable_array) {
       ASSERT(leftover_size == Object::InstanceSize());
       RawObject* raw = reinterpret_cast<RawObject*>(RawObject::FromAddr(addr));
       raw->ptr()->class_ = isolate->object_store()->object_class();
+      tags = 0;
       tags = RawObject::SizeTag::update(leftover_size, tags);
       raw->ptr()->tags_ = tags;
     }
@@ -8610,9 +8679,10 @@ void GrowableObjectArray::Add(const Object& value, Heap::Space space) const {
 
 void GrowableObjectArray::Grow(intptr_t new_capacity, Heap::Space space) const {
   ASSERT(new_capacity > Capacity());
-  Array& contents = Array::Handle(data());
-  StorePointer(&(raw_ptr()->data_),
-               Array::Grow(contents, new_capacity, space));
+  const Array& contents = Array::Handle(data());
+  const Array& new_contents =
+      Array::Handle(Array::Grow(contents, new_capacity, space));
+  StorePointer(&(raw_ptr()->data_), new_contents.raw());
 }
 
 

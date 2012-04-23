@@ -359,8 +359,8 @@ int main()
         return 40;
     }
 
-    Dart_Handle cls = Dart_CreateNativeWrapperClass(lib, Dart_NewString("NumberArrayPointer"), 1);
-    if (!checkResult(cls)) {
+    Dart_Handle wrapper = Dart_CreateNativeWrapperClass(lib, Dart_NewString("NumberArrayPointer"), 1);
+    if (!checkResult(wrapper)) {
         return 45;
     }
 
@@ -369,11 +369,12 @@ int main()
         return 50;
     }
 
-    result = Dart_InvokeStatic(lib,
-                                Dart_NewString("NumberArray"),
-                                Dart_NewString("foo"),
-                                0,
-                                NULL);
+    Dart_Handle cls = Dart_GetClass(lib, Dart_NewString("NumberArray"));
+
+    result = Dart_Invoke(cls,
+                         Dart_NewString("foo"),
+                         0,
+                         NULL);
 
     if (!checkResult(result)) {
         return 60;

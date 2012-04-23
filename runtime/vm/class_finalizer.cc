@@ -750,6 +750,10 @@ void ClassFinalizer::ResolveAndFinalizeSignature(const Class& cls,
   }
   ResolveType(cls, type, result_finalization);
   type = FinalizeType(cls, type, result_finalization);
+  // In production mode, a malformed result type is mapped to Dynamic.
+  if (!FLAG_enable_type_checks && type.IsMalformed()) {
+    type = Type::DynamicType();
+  }
   function.set_result_type(type);
   // Resolve formal parameter types.
   const intptr_t num_parameters = function.NumberOfParameters();
@@ -757,6 +761,10 @@ void ClassFinalizer::ResolveAndFinalizeSignature(const Class& cls,
     type = function.ParameterTypeAt(i);
     ResolveType(cls, type, kFinalize);
     type = FinalizeType(cls, type, kFinalize);
+    // In production mode, a malformed parameter type is mapped to Dynamic.
+    if (!FLAG_enable_type_checks && type.IsMalformed()) {
+      type = Type::DynamicType();
+    }
     function.SetParameterTypeAt(i, type);
   }
 }
@@ -1150,10 +1158,10 @@ void ClassFinalizer::ResolveInterfaces(const Class& cls,
                   String::Handle(interface.Name()).ToCString());
     }
     interface_class = interface.type_class();
-    if (!interface_class.is_interface()) {
+    if (interface_class.IsSignatureClass()) {
       const Script& script = Script::Handle(cls.script());
       ReportError(script, cls.token_index(),
-                  "class '%s' is used where an interface is expected",
+                  "'%s' is used where an interface or class name is expected",
                   String::Handle(interface_class.Name()).ToCString());
     }
     // Verify that unless cls belongs to core lib, it cannot extend or implement
@@ -1270,7 +1278,9 @@ void ClassFinalizer::FinalizeMalformedType(const Error& prev_error,
   va_list args;
   va_start(args, format);
   LanguageError& error = LanguageError::Handle();
-  if ((finalization == kFinalizeWellFormed) || FLAG_enable_type_checks) {
+  if (FLAG_enable_type_checks ||
+      !type.HasResolvedTypeClass() ||
+      (finalization == kFinalizeWellFormed)) {
     const Script& script = Script::Handle(cls.script());
     if (prev_error.IsNull()) {
       error ^= Parser::FormatError(
@@ -1283,12 +1293,15 @@ void ClassFinalizer::FinalizeMalformedType(const Error& prev_error,
       ReportError(error);
     }
   }
-  if (FLAG_enable_type_checks) {
-    // In checked mode, mark type as malformed.
+  if (FLAG_enable_type_checks || !type.HasResolvedTypeClass()) {
+    // In check mode, always mark the type as malformed.
+    // In production mode, mark the type as malformed only if its type class is
+    // not resolved.
     type.set_malformed_error(error);
   } else {
-     // In production mode, replace malformed type with Dynamic type.
-    type.set_type_class(Class::Handle(Object::dynamic_class()));
+     // In production mode, do not mark the type with a resolved type class as
+     // malformed, but make it raw.
+    ASSERT(type.HasResolvedTypeClass());
     type.set_arguments(AbstractTypeArguments::Handle());
   }
   if (!type.IsFinalized()) {

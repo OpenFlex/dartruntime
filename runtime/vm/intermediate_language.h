@@ -28,6 +28,7 @@ class LocalVariable;
 #define FOR_EACH_COMPUTATION(M)                                                \
   FOR_EACH_VALUE(M)                                                            \
   M(AssertAssignable, AssertAssignableComp)                                    \
+  M(AssertBoolean, AssertBooleanComp)                                          \
   M(CurrentContext, CurrentContextComp)                                        \
   M(StoreContext, StoreContextComp)                                            \
   M(ClosureCall, ClosureCallComp)                                              \
@@ -36,6 +37,7 @@ class LocalVariable;
   M(LoadLocal, LoadLocalComp)                                                  \
   M(StoreLocal, StoreLocalComp)                                                \
   M(StrictCompare, StrictCompareComp)                                          \
+  M(EqualityCompare, EqualityCompareComp)                                      \
   M(NativeCall, NativeCallComp)                                                \
   M(StoreIndexed, StoreIndexedComp)                                            \
   M(InstanceSetter, InstanceSetterComp)                                        \
@@ -137,19 +139,77 @@ class ConstantVal: public Value {
 
 class AssertAssignableComp : public Computation {
  public:
-  AssertAssignableComp(Value* value, const AbstractType& type)
-      : value_(value), type_(type) { }
+  AssertAssignableComp(intptr_t node_id,
+                       intptr_t token_index,
+                       intptr_t try_index,
+                       Value* value,
+                       Value* instantiator_type_arguments,  // Can be NULL.
+                       const AbstractType& dst_type,
+                       const String& dst_name)
+      : node_id_(node_id),
+        token_index_(token_index),
+        try_index_(try_index),
+        value_(value),
+        instantiator_type_arguments_(instantiator_type_arguments),
+        dst_type_(dst_type),
+        dst_name_(dst_name) {
+    ASSERT(value_ != NULL);
+    ASSERT(!dst_type.IsNull());
+    ASSERT(!dst_name.IsNull());
+  }
 
   DECLARE_COMPUTATION(AssertAssignable)
 
+  intptr_t node_id() const { return node_id_; }
+  intptr_t token_index() const { return token_index_; }
+  intptr_t try_index() const { return try_index_; }
   Value* value() const { return value_; }
-  const AbstractType& type() const { return type_; }
+  Value* instantiator_type_arguments() const {
+    return instantiator_type_arguments_;
+  }
+  const AbstractType& dst_type() const { return dst_type_; }
+  const String& dst_name() const { return dst_name_; }
 
  private:
+  const intptr_t node_id_;
+  const intptr_t token_index_;
+  const intptr_t try_index_;
   Value* value_;
-  const AbstractType& type_;
+  Value* instantiator_type_arguments_;
+  const AbstractType& dst_type_;
+  const String& dst_name_;
 
   DISALLOW_COPY_AND_ASSIGN(AssertAssignableComp);
+};
+
+
+class AssertBooleanComp : public Computation {
+ public:
+  AssertBooleanComp(intptr_t node_id,
+                    intptr_t token_index,
+                    intptr_t try_index,
+                    Value* value)
+      : node_id_(node_id),
+        token_index_(token_index),
+        try_index_(try_index),
+        value_(value) {
+    ASSERT(value_ != NULL);
+  }
+
+  DECLARE_COMPUTATION(AssertBoolean)
+
+  intptr_t node_id() const { return node_id_; }
+  intptr_t token_index() const { return token_index_; }
+  intptr_t try_index() const { return try_index_; }
+  Value* value() const { return value_; }
+
+ private:
+  const intptr_t node_id_;
+  const intptr_t token_index_;
+  const intptr_t try_index_;
+  Value* value_;
+
+  DISALLOW_COPY_AND_ASSIGN(AssertBooleanComp);
 };
 
 
@@ -280,6 +340,41 @@ class StrictCompareComp : public Computation {
   Value* right_;
 
   DISALLOW_COPY_AND_ASSIGN(StrictCompareComp);
+};
+
+
+class EqualityCompareComp : public Computation {
+ public:
+  EqualityCompareComp(intptr_t node_id,
+                      intptr_t token_index,
+                      intptr_t try_index,
+                      Value* left,
+                      Value* right)
+    : node_id_(node_id),
+      token_index_(token_index),
+      try_index_(try_index),
+      left_(left),
+      right_(right) {
+    ASSERT(left_ != NULL);
+    ASSERT(right_ != NULL);
+  }
+
+  DECLARE_COMPUTATION(EqualityCompareComp)
+
+  intptr_t node_id() const { return node_id_; }
+  intptr_t token_index() const { return token_index_; }
+  intptr_t try_index() const { return try_index_; }
+  Value* left() const { return left_; }
+  Value* right() const { return right_; }
+
+ private:
+  const intptr_t node_id_;
+  const intptr_t token_index_;
+  const intptr_t try_index_;
+  Value* left_;
+  Value* right_;
+
+  DISALLOW_COPY_AND_ASSIGN(EqualityCompareComp);
 };
 
 
@@ -607,18 +702,24 @@ class InstanceOfComp : public Computation {
                  intptr_t token_index,
                  intptr_t try_index,
                  Value* value,
+                 Value* type_arguments,  // Can be NULL.
                  const AbstractType& type,
                  bool negate_result)
       : node_id_(node_id),
         token_index_(token_index),
         try_index_(try_index),
         value_(value),
+        type_arguments_(type_arguments),
         type_(type),
-        negate_result_(negate_result) {}
+        negate_result_(negate_result) {
+    ASSERT(value_ != NULL);
+    ASSERT(!type.IsNull());
+  }
 
   DECLARE_COMPUTATION(InstanceOf)
 
   Value* value() const { return value_; }
+  Value* type_arguments() const { return type_arguments_; }
   bool negate_result() const { return negate_result_; }
   const AbstractType& type() const { return type_; }
   intptr_t node_id() const { return node_id_; }
@@ -630,6 +731,7 @@ class InstanceOfComp : public Computation {
   const intptr_t token_index_;
   const intptr_t try_index_;
   Value* value_;
+  Value* type_arguments_;
   const AbstractType& type_;
   const bool negate_result_;
 
@@ -667,7 +769,13 @@ class CreateArrayComp : public Computation {
   CreateArrayComp(ArrayNode* node,
                   intptr_t try_index,
                   ZoneGrowableArray<Value*>* elements)
-      : ast_node_(*node), try_index_(try_index), elements_(elements) { }
+      : ast_node_(*node), try_index_(try_index), elements_(elements) {
+#if defined(DEBUG)
+    for (int i = 0; i < ElementCount(); ++i) {
+      ASSERT(ElementAt(i) != NULL);
+    }
+#endif
+  }
 
   DECLARE_COMPUTATION(CreateArray)
 
@@ -1260,8 +1368,8 @@ class BindInstr : public Instruction {
 
 class ReturnInstr : public Instruction {
  public:
-  ReturnInstr(Value* value, intptr_t token_index)
-      : value_(value), token_index_(token_index) {
+  ReturnInstr(intptr_t node_id, intptr_t token_index, Value* value)
+      : node_id_(node_id), token_index_(token_index), value_(value) {
     ASSERT(value_ != NULL);
   }
 
@@ -1269,13 +1377,15 @@ class ReturnInstr : public Instruction {
 
   Value* value() const { return value_; }
   intptr_t token_index() const { return token_index_; }
+  intptr_t node_id() const { return node_id_; }
 
   virtual Instruction* StraightLineSuccessor() const { return NULL; }
   virtual void SetSuccessor(Instruction* instr) { UNREACHABLE(); }
 
  private:
+  const intptr_t node_id_;
+  const intptr_t token_index_;
   Value* value_;
-  intptr_t token_index_;
 
   DISALLOW_COPY_AND_ASSIGN(ReturnInstr);
 };

@@ -25,6 +25,7 @@ namespace dart {
   class clazz;
 CLASS_LIST(DEFINE_FORWARD_DECLARATION)
 #undef DEFINE_FORWARD_DECLARATION
+class Api;
 class Assembler;
 class Code;
 class LocalScope;
@@ -1769,7 +1770,9 @@ class Library : public Object {
   RawClass* LookupClass(const String& name) const;
   RawObject* LookupLocalObject(const String& name) const;
   RawClass* LookupLocalClass(const String& name) const;
+  RawField* LookupFieldAllowPrivate(const String& name) const;
   RawField* LookupLocalField(const String& name) const;
+  RawFunction* LookupFunctionAllowPrivate(const String& name) const;
   RawFunction* LookupLocalFunction(const String& name) const;
   RawLibraryPrefix* LookupLocalLibraryPrefix(const String& name) const;
   RawScript* LookupScript(const String& url) const;
@@ -2737,10 +2740,17 @@ class Smi : public Integer {
     return reinterpret_cast<intptr_t>(New(value));
   }
 
-  static bool IsValid(intptr_t value);
-  static bool IsValid64(int64_t value);
+  static bool IsValid(intptr_t value) {
+    return (value >= kMinValue) && (value <= kMaxValue);
+  }
+
+  static bool IsValid64(int64_t value) {
+    return (value >= kMinValue) && (value <= kMaxValue);
+  }
 
  private:
+  friend class Api;  // For ValueFromRaw
+
   static intptr_t ValueFromRaw(uword raw_value) {
     intptr_t value = raw_value;
     ASSERT((value & kSmiTagMask) == kSmiTag);

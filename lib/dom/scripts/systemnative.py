@@ -68,11 +68,11 @@ class NativeImplementationSystem(System):
     class_name = 'Dart%s' % self._interface.id
     for operation in interface.operations:
       if operation.type.id == 'void':
-        return_type = 'void'
         return_prefix = ''
+        error_return = ''
       else:
-        return_type = 'bool'
         return_prefix = 'return '
+        error_return = ' false'
 
       parameters = []
       arguments = []
@@ -80,25 +80,33 @@ class NativeImplementationSystem(System):
         argument_type_info = GetIDLTypeInfo(argument.type.id)
         parameters.append('%s %s' % (argument_type_info.parameter_type(),
                                      argument.id))
-        arguments.append(argument.id)
+        arguments.append(argument_type_info.to_dart_conversion(argument.id))
         cpp_impl_includes |= set(argument_type_info.conversion_includes())
 
+      native_return_type = GetIDLTypeInfo(operation.type.id).native_type()
       cpp_header_handlers_emitter.Emit(
           '\n'
           '    virtual $TYPE handleEvent($PARAMETERS);\n',
-          TYPE=return_type, PARAMETERS=', '.join(parameters))
+          TYPE=native_return_type, PARAMETERS=', '.join(parameters))
 
       cpp_impl_handlers_emitter.Emit(
           '\n'
           '$TYPE $CLASS_NAME::handleEvent($PARAMETERS)\n'
           '{\n'
-          '    $(RETURN_PREFIX)m_callback.handleEvent($ARGUMENTS);\n'
+          '    if (!m_callback.isolate()->isAlive())\n'
+          '        return$ERROR_RETURN;\n'
+          '    DartIsolate::Scope scope(m_callback.isolate());\n'
+          '    DartApiScope apiScope;\n'
+          '    Dart_Handle arguments[] = { $ARGUMENTS };\n'
+          '    $(RETURN_PREFIX)m_callback.handleEvent($ARGUMENT_COUNT, arguments);\n'
           '}\n',
-          TYPE=return_type,
+          TYPE=native_return_type,
           CLASS_NAME=class_name,
           PARAMETERS=', '.join(parameters),
+          ERROR_RETURN=error_return,
           RETURN_PREFIX=return_prefix,
-          ARGUMENTS=', '.join(arguments))
+          ARGUMENTS=', '.join(arguments),
+          ARGUMENT_COUNT=len(arguments))
 
     cpp_header_path = self._FilePathForCppHeader(self._interface.id)
     cpp_header_emitter = self._emitters.FileEmitter(cpp_header_path)
@@ -439,13 +447,6 @@ class NativeImplementationGenerator(systemwrapping.WrappingInterfaceGenerator):
     return False
 
   def AddAttribute(self, getter, setter):
-    # FIXME: Dartium does not support attribute event listeners. However, JS
-    # implementation falls back to them when addEventListener is not available.
-    # Make sure addEventListener is available in all EventTargets and remove
-    # this check.
-    if (getter or setter).type.id == 'EventListener':
-      return
-
     if 'CheckSecurityForNode' in (getter or setter).ext_attrs:
       # FIXME: exclude from interface as well.
       return
@@ -574,7 +575,7 @@ class NativeImplementationGenerator(systemwrapping.WrappingInterfaceGenerator):
     if 'Custom' in info.overloads[0].ext_attrs:
       parameters = info.ParametersImplementationDeclaration()
       dart_declaration = '%s %s(%s)' % (info.type_name, info.name, parameters)
-      argument_count = 1 + len(info.arg_infos)
+      argument_count = 1 + len(info.param_infos)
       self._GenerateNativeBinding(info.name, argument_count, dart_declaration,
           'Callback', True)
       return
@@ -611,7 +612,7 @@ class NativeImplementationGenerator(systemwrapping.WrappingInterfaceGenerator):
     native_name = info.name
     if self._native_version > 1:
       native_name = '%s_%s' % (native_name, self._native_version)
-    argument_list = ', '.join([info.arg_infos[i][0]
+    argument_list = ', '.join([info.param_infos[i].name
                                for (i, arg) in enumerate(operation.arguments)])
 
     # Generate dispatcher.
@@ -790,35 +791,13 @@ class NativeImplementationGenerator(systemwrapping.WrappingInterfaceGenerator):
       return_type_info = GetIDLTypeInfo(idl_return_type)
       self._cpp_impl_includes |= set(return_type_info.conversion_includes())
 
-      # Generate C++ cast based on idl return type.
-      conversion_cast = return_type_info.conversion_cast('$FUNCTION_CALL')
-      if isinstance(return_type_info, SVGTearOffIDLTypeInfo):
-        svg_primitive_types = ['SVGAngle', 'SVGLength', 'SVGMatrix',
-            'SVGNumber', 'SVGPoint', 'SVGRect', 'SVGTransform']
-        conversion_cast = '%s::create($FUNCTION_CALL)'
-        if self._interface.id.startswith('SVGAnimated'):
-          conversion_cast = 'static_cast<%s*>($FUNCTION_CALL)'
-        elif return_type_info.idl_type() == 'SVGStringList':
-          conversion_cast = '%s::create(receiver, $FUNCTION_CALL)'
-        elif self._interface.id.endswith('List'):
-          conversion_cast = 'static_cast<%s*>($FUNCTION_CALL.get())'
-        elif return_type_info.idl_type() in svg_primitive_types:
-          conversion_cast = '%s::create($FUNCTION_CALL)'
-        else:
-          conversion_cast = 'static_cast<%s*>($FUNCTION_CALL)'
-        conversion_cast = conversion_cast % return_type_info.native_type()
-
       # Generate to Dart conversion of C++ value.
-      conversion_arguments = [conversion_cast]
-      if (return_type_info.idl_type() in ['DOMString', 'AtomicString'] and
-          'TreatReturnedNullStringAs' in attributes):
-        conversion_arguments.append('ConvertDefaultToNull')
-
+      to_dart_conversion = return_type_info.to_dart_conversion('$FUNCTION_CALL', self._interface.id, attributes)
       invocation_template = emitter.Format(
-          '        Dart_Handle returnValue = toDartValue($ARGUMENTS);\n'
+          '        Dart_Handle returnValue = $TO_DART_CONVERSION;\n'
           '        if (returnValue)\n'
           '            Dart_SetReturnValue(args, returnValue);\n',
-          ARGUMENTS=', '.join(conversion_arguments))
+          TO_DART_CONVERSION=to_dart_conversion)
 
     if raises_dom_exceptions:
       # Add 'ec' argument to WebCore invocation and convert DOM exception to Dart exception.
@@ -843,9 +822,15 @@ def _GenerateCPPIncludes(includes):
   return ''.join(['#include %s\n' % include for include in includes])
 
 def _DOMWrapperType(database, interface):
+  if interface.id == 'MessagePort':
+    return 'MessagePort'
+
+  type = 'Object'
   if _InstanceOfNode(database, interface):
-    return 'DOMNode'
-  return 'DOMObject'
+    type = 'Node'
+  if 'ActiveDOMObject' in interface.ext_attrs:
+    type = 'Active%s' % type
+  return type
 
 def _InstanceOfNode(database, interface):
   if interface.id == 'Node':

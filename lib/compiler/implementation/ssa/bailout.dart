@@ -52,18 +52,122 @@ class Environment {
     loopMarkers.addAll(other.loopMarkers);
   }
 
-  List<HInstruction> buildAndSetLast(HInstruction instruction) {
-    remove(instruction);
-    List<HInstruction> result = new List<HInstruction>.from(lives);
-    result.addLast(instruction);
-    add(instruction);
-    return result;
+  /**
+   * Stores all live variables in the guard. The guarded instruction will be the
+   * last input in the guard's input list.
+   */
+  void storeInGuard(HTypeGuard guard) {
+    HInstruction guarded = guard.guarded;
+    List<HInstruction> inputs = guard.inputs;
+    assert(inputs.length == 1);
+    inputs.clear();
+    // Remove the guarded from the environment, so that we are sure it is last
+    // when we add it again.
+    remove(guarded);
+    inputs.addAll(lives);
+    inputs.addLast(guarded);
+    add(guarded);
+    for (int i = 0; i < inputs.length - 1; i++) {
+      HInstruction input = inputs[i];
+      input.usedBy.add(guard);
+    }
   }
 
   bool isEmpty() => lives.isEmpty();
   bool contains(HInstruction instruction) => lives.contains(instruction);
   bool containsLoopMarker(HBasicBlock block) => loopMarkers.contains(block);
   void clear() => lives.clear();
+}
+
+
+/**
+ * Visits the graph in dominator order and inserts TypeGuards in places where
+ * we consider the guard to be of value.
+ *
+ * Might modify the [:propagatedType:] fields of the instructions in an
+ * inconsistent way. No further analysis should rely on them.
+ */
+class SsaTypeGuardInserter extends HGraphVisitor implements OptimizationPhase {
+  final String name = 'SsaTypeGuardInserter';
+  final WorkItem work;
+  int stateId = 1;
+
+  SsaTypeGuardInserter(this.work);
+
+  void visitGraph(HGraph graph) {
+    work.guards = <HTypeGuard>[];
+    visitDominatorTree(graph);
+  }
+
+  void visitBasicBlock(HBasicBlock block) {
+    block.forEachPhi(visitInstruction);
+
+    HInstruction instruction = block.first;
+    while (instruction !== null) {
+      // Note that visitInstruction (from the phis and here) might insert an
+      // HTypeGuard instruction. We have to skip those.
+      if (instruction is !HTypeGuard) visitInstruction(instruction);
+      instruction = instruction.next;
+    }
+  }
+
+  bool typeGuardWouldBeValuable(HInstruction instruction,
+                                HType speculativeType) {
+    bool isNested(HBasicBlock inner, HBasicBlock outer) {
+      if (inner === outer) return false;
+      if (outer === null) return true;
+      while (inner !== null) {
+        if (inner === outer) return true;
+        inner = inner.parentLoopHeader;
+      }
+      return false;
+    }
+
+    // If the instruction is not in a loop then the header will be null.
+    HBasicBlock currentLoopHeader = instruction.block.enclosingLoopHeader;
+    for (HInstruction user in instruction.usedBy) {
+      HBasicBlock userLoopHeader = user.block.enclosingLoopHeader;
+      if (isNested(userLoopHeader, currentLoopHeader)) return true;
+    }
+    return false;
+  }
+
+  bool shouldInsertTypeGuard(HInstruction instruction) {
+    HType speculativeType = instruction.propagatedType;
+    HType computedType = instruction.computeTypeFromInputTypes();
+    // Start by reverting the propagated type. If we add a type guard then the
+    // guard will expose the speculative type. If we don't add a type guard
+    // then this avoids subsequent instructions to use the the wrong type.
+    //
+    // Note that just setting the propagatedType of the instruction is not
+    // complete since the type could lead to a phi node which in turn could
+    // change the computedType. In this case we might miss some guards we
+    // would have liked to insert. Most of the time this should however be
+    // fine, due to dominator-order visiting.
+    instruction.propagatedType = computedType;
+
+    if (!speculativeType.isUseful()) return false;
+    // If the types agree we don't need to check.
+    if (speculativeType == computedType) return false;
+    // If a bailout check is more expensive than doing the actual operation
+    // don't do it either.
+    return typeGuardWouldBeValuable(instruction, speculativeType);
+  }
+
+  void visitInstruction(HInstruction instruction) {
+    HType speculativeType = instruction.propagatedType;
+    if (shouldInsertTypeGuard(instruction)) {
+      List<HInstruction> inputs = <HInstruction>[instruction];
+      HTypeGuard guard = new HTypeGuard(speculativeType, stateId++, inputs);
+      guard.propagatedType = speculativeType;
+      work.guards.add(guard);
+      instruction.block.rewrite(instruction, guard);
+      HInstruction insertionPoint = (instruction is HPhi)
+          ? instruction.block.first
+          : instruction.next;
+      insertionPoint.block.addBefore(insertionPoint, guard);
+    }
+  }
 }
 
 /**
@@ -74,16 +178,15 @@ class Environment {
  *
  * At the end of the computation, insert type guards in the graph.
  */
-class SsaTypeGuardBuilder extends HBaseVisitor implements OptimizationPhase {
+class SsaEnvironmentBuilder extends HBaseVisitor implements OptimizationPhase {
   final Compiler compiler;
-  final WorkItem work;
-  final String name = 'SsaTypeGuardBuilder';
+  final String name = 'SsaEnvironmentBuilder';
   Environment environment;
   SubGraph subGraph;
 
   final Map<HInstruction, Environment> capturedEnvironments;
 
-  SsaTypeGuardBuilder(Compiler this.compiler, WorkItem this.work)
+  SsaEnvironmentBuilder(Compiler this.compiler)
     : capturedEnvironments = new Map<HInstruction, Environment>();
 
 
@@ -96,12 +199,6 @@ class SsaTypeGuardBuilder extends HBaseVisitor implements OptimizationPhase {
           node: compiler.currentElement.parseNode(compiler));
     }
     insertCapturedEnvironments();
-  }
-
-  void maybeCaptureEnvironment(HInstruction instruction) {
-    if (shouldCaptureEnvironment(instruction)) {
-      capturedEnvironments[instruction] = new Environment.from(environment);
-    }
   }
 
   void visitSubGraph(SubGraph newSubGraph) {
@@ -141,7 +238,7 @@ class SsaTypeGuardBuilder extends HBaseVisitor implements OptimizationPhase {
       // will be replaced by the live environment at the loop entry,
       // in this case {x}.
       environment.removeLoopMarker(block);
-      capturedEnvironments.forEach((instruction, env) {
+      capturedEnvironments.forEach((ignoredInstruction, env) {
         if (env.containsLoopMarker(block)) {
           env.removeLoopMarker(block);
           env.addAll(environment);
@@ -150,8 +247,14 @@ class SsaTypeGuardBuilder extends HBaseVisitor implements OptimizationPhase {
     }
   }
 
+  void visitTypeGuard(HTypeGuard guard) {
+    environment.remove(guard);
+    assert(guard.inputs.length == 1);
+    environment.add(guard.guarded);
+    capturedEnvironments[guard] = new Environment.from(environment);
+  }
+
   void visitPhi(HPhi phi) {
-    maybeCaptureEnvironment(phi);
     environment.remove(phi);
     // If the block is a loop header, we insert the incoming values of
     // the phis, and remove the loop values.
@@ -166,7 +269,6 @@ class SsaTypeGuardBuilder extends HBaseVisitor implements OptimizationPhase {
   }
 
   void visitInstruction(HInstruction instruction) {
-    maybeCaptureEnvironment(instruction);
     environment.remove(instruction);
     for (int i = 0, len = instruction.inputs.length; i < len; i++) {
       environment.add(instruction.inputs[i]);
@@ -275,22 +377,9 @@ class SsaTypeGuardBuilder extends HBaseVisitor implements OptimizationPhase {
                            instruction: instruction);
   }
 
-  bool shouldCaptureEnvironment(HInstruction instruction) {
-    return instruction.type.isKnown() && !instruction.hasExpectedType();
-  }
-
   void insertCapturedEnvironments() {
-    work.guards = <HTypeGuard>[];
-    int state = 1;
-    capturedEnvironments.forEach((HInstruction instruction, Environment env) {
-      List<HInstruction> inputs = env.buildAndSetLast(instruction);
-      HTypeGuard guard = new HTypeGuard(state++, inputs);
-      work.guards.add(guard);
-      instruction.block.rewrite(instruction, guard);
-      HInstruction insertionPoint = (instruction is HPhi)
-          ? instruction.block.first
-          : instruction.next;
-      insertionPoint.block.addBefore(insertionPoint, guard);
+    capturedEnvironments.forEach((HTypeGuard guard, Environment env) {
+      env.storeInGuard(guard);
     });
   }
 }

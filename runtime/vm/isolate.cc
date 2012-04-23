@@ -6,14 +6,13 @@
 
 #include "include/dart_api.h"
 #include "platform/assert.h"
-#include "vm/code_index_table.h"
 #include "vm/compiler_stats.h"
 #include "vm/dart_api_state.h"
 #include "vm/dart_entry.h"
 #include "vm/debugger.h"
 #include "vm/debuginfo.h"
 #include "vm/heap.h"
-#include "vm/message.h"
+#include "vm/message_handler.h"
 #include "vm/object_store.h"
 #include "vm/parser.h"
 #include "vm/port.h"
@@ -40,6 +39,7 @@ class IsolateMessageHandler : public MessageHandler {
 
   const char* name() const;
   void MessageNotify(Message::Priority priority);
+  bool HandleMessage(Message* message);
 
 #if defined(DEBUG)
   // Check that it is safe to access this handler.
@@ -76,6 +76,57 @@ void IsolateMessageHandler::MessageNotify(Message::Priority priority) {
 }
 
 
+static RawInstance* DeserializeMessage(void* data) {
+  // Create a snapshot object using the buffer.
+  const Snapshot* snapshot = Snapshot::SetupFromBuffer(data);
+  ASSERT(snapshot->IsMessageSnapshot());
+
+  // Read object back from the snapshot.
+  SnapshotReader reader(snapshot, Isolate::Current());
+  Instance& instance = Instance::Handle();
+  instance ^= reader.ReadObject();
+  return instance.raw();
+}
+
+
+bool IsolateMessageHandler::HandleMessage(Message* message) {
+  StartIsolateScope start_scope(isolate_);
+  Zone zone(isolate_);
+  HandleScope handle_scope(isolate_);
+
+  const Instance& msg =
+      Instance::Handle(DeserializeMessage(message->data()));
+  if (message->IsOOB()) {
+    // For now the only OOB messages are Mirrors messages.
+    const Object& result = Object::Handle(
+        DartLibraryCalls::HandleMirrorsMessage(
+            message->dest_port(), message->reply_port(), msg));
+    delete message;
+    if (result.IsError()) {
+      // TODO(turnidge): Propagating the error is probably wrong here.
+      Error& error = Error::Handle();
+      error ^= result.raw();
+      isolate_->object_store()->set_sticky_error(error);
+      return false;
+    }
+    ASSERT(result.IsNull());
+  } else {
+    const Object& result = Object::Handle(
+        DartLibraryCalls::HandleMessage(
+            message->dest_port(), message->reply_port(), msg));
+    delete message;
+    if (result.IsError()) {
+      Error& error = Error::Handle();
+      error ^= result.raw();
+      isolate_->object_store()->set_sticky_error(error);
+      return false;
+    }
+    ASSERT(result.IsNull());
+  }
+  return true;
+}
+
+
 #if defined(DEBUG)
 void IsolateMessageHandler::CheckAccess() {
   ASSERT(isolate_ == Isolate::Current());
@@ -105,14 +156,15 @@ Isolate::Isolate()
       library_tag_handler_(NULL),
       api_state_(NULL),
       stub_code_(NULL),
-      code_index_table_(NULL),
       debugger_(NULL),
       long_jump_base_(NULL),
       timer_list_(),
       ast_node_id_(AstNode::kNoId),
       mutex_(new Mutex()),
       stack_limit_(0),
-      saved_stack_limit_(0) {
+      saved_stack_limit_(0),
+      message_handler_(NULL),
+      spawn_data_(NULL) {
 }
 
 
@@ -122,7 +174,6 @@ Isolate::~Isolate() {
   delete object_store_;
   delete api_state_;
   delete stub_code_;
-  delete code_index_table_;
   delete debugger_;
   delete mutex_;
   mutex_ = NULL;  // Fail fast if interrupts are scheduled on a dead isolate.
@@ -370,67 +421,6 @@ Dart_IsolateInterruptCallback Isolate::InterruptCallback() {
 }
 
 
-static RawInstance* DeserializeMessage(void* data) {
-  // Create a snapshot object using the buffer.
-  const Snapshot* snapshot = Snapshot::SetupFromBuffer(data);
-  ASSERT(snapshot->IsMessageSnapshot());
-
-  // Read object back from the snapshot.
-  SnapshotReader reader(snapshot, Isolate::Current());
-  Instance& instance = Instance::Handle();
-  instance ^= reader.ReadObject();
-  return instance.raw();
-}
-
-
-
-RawError* Isolate::StandardRunLoop() {
-  ASSERT(message_notify_callback() == NULL);
-  ASSERT(message_handler() != NULL);
-
-  while (message_handler()->HasLivePorts()) {
-    ASSERT(this == Isolate::Current());
-    Zone zone(this);
-    HandleScope handle_scope(this);
-
-    // TODO(turnidge): This code is duplicated elsewhere.  Consolidate.
-    Message* message = message_handler()->queue()->Dequeue(0);
-    if (message != NULL) {
-      const Instance& msg =
-          Instance::Handle(DeserializeMessage(message->data()));
-      if (message->priority() >= Message::kOOBPriority) {
-        // For now the only OOB messages are Mirrors messages.
-        const Object& result = Object::Handle(
-            DartLibraryCalls::HandleMirrorsMessage(
-                message->dest_port(), message->reply_port(), msg));
-        delete message;
-        if (result.IsError()) {
-          // TODO(turnidge): Propagating the error is probably wrong here.
-          Error& error = Error::Handle();
-          error ^= result.raw();
-          return error.raw();
-        }
-        ASSERT(result.IsNull());
-      } else {
-        const Object& result = Object::Handle(
-            DartLibraryCalls::HandleMessage(
-                message->dest_port(), message->reply_port(), msg));
-        delete message;
-        if (result.IsError()) {
-          Error& error = Error::Handle();
-          error ^= result.raw();
-          return error.raw();
-        }
-        ASSERT(result.IsNull());
-      }
-    }
-  }
-
-  // Indicates success.
-  return Error::null();
-}
-
-
 void Isolate::VisitObjectPointers(ObjectPointerVisitor* visitor,
                                   bool visit_prologue_weak_handles,
                                   bool validate_frames) {
@@ -456,11 +446,6 @@ void Isolate::VisitObjectPointers(ObjectPointerVisitor* visitor,
   // Visit the dart api state for all local and persistent handles.
   if (api_state() != NULL) {
     api_state()->VisitObjectPointers(visitor, visit_prologue_weak_handles);
-  }
-
-  // Visit all objects in the code index table.
-  if (code_index_table() != NULL) {
-    code_index_table()->VisitObjectPointers(visitor);
   }
 
   // Visit the top context which is stored in the isolate.

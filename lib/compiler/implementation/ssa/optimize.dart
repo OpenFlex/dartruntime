@@ -35,13 +35,21 @@ class SsaOptimizerTask extends CompilerTask {
 
   bool trySpeculativeOptimizations(WorkItem work, HGraph graph) {
     return measure(() {
-      // Run the phases that will generate type guards. We must also run
-      // [SsaCheckInserter] because the type propagator also propagates
-      // types non-speculatively. For example, it propagates the type
-      // array for a call to the List constructor.
+      // Run the phases that will generate type guards.
       List<OptimizationPhase> phases = <OptimizationPhase>[
           new SsaSpeculativeTypePropagator(compiler),
-          new SsaTypeGuardBuilder(compiler, work),
+          new SsaTypeGuardInserter(work),
+          new SsaEnvironmentBuilder(compiler),
+          // Change the propagated types back to what they were before we
+          // speculatively propagated, so that we can generate the bailout
+          // version.
+          // Note that we do this even if there were no guards inserted. If a
+          // guard is not beneficial enough we don't emit one, but there might
+          // still be speculative types on the instructions.
+          new SsaTypePropagator(compiler),
+          // Then run the [SsaCheckInserter] because the type propagator also
+          // propagated types non-speculatively. For example, it might have
+          // propagated the type array for a call to the List constructor.
           new SsaCheckInserter(compiler)];
       runPhases(graph, phases);
       return !work.guards.isEmpty();
@@ -53,10 +61,7 @@ class SsaOptimizerTask extends CompilerTask {
       // In order to generate correct code for the bailout version, we did not
       // propagate types from the instruction to the type guard. We do it
       // now to be able to optimize further.
-      work.guards.forEach((HTypeGuard guard) {
-        guard.type = guard.guarded.type;
-        guard.guarded.type = HType.UNKNOWN;
-      });
+      work.guards.forEach((HTypeGuard guard) { guard.isOn = true; });
       // We also need to insert range and integer checks for the type guards,
       // now that they know their type. We did not need to do that
       // before because instructions that reference a guard would
@@ -78,9 +83,9 @@ class SsaConstantFolder extends HBaseVisitor implements OptimizationPhase {
 
   SsaConstantFolder(this.compiler);
 
-  void visitGraph(HGraph graph) {
-    this.graph = graph;
-    visitDominatorTree(graph);
+  void visitGraph(HGraph visitee) {
+    graph = visitee;
+    visitDominatorTree(visitee);
   }
 
   visitBasicBlock(HBasicBlock block) {
@@ -99,8 +104,8 @@ class SsaConstantFolder extends HBaseVisitor implements OptimizationPhase {
         block.remove(instruction);
         // If the replacement instruction does not know its type yet,
         // use the type of the instruction.
-        if (!replacement.type.isKnown()) {
-          replacement.type = instruction.type;
+        if (!replacement.propagatedType.isUseful()) {
+          replacement.propagatedType = instruction.propagatedType;
         }
       }
       instruction = next;
@@ -117,7 +122,7 @@ class SsaConstantFolder extends HBaseVisitor implements OptimizationPhase {
     HInstruction input = inputs[0];
     if (input.isBoolean()) return input;
     // All values !== true are boolified to false.
-    if (input.type.isKnown()) {
+    if (input.propagatedType.isUseful()) {
       return graph.addConstantBool(false);
     }
     return node;
@@ -147,12 +152,72 @@ class SsaConstantFolder extends HBaseVisitor implements OptimizationPhase {
   }
 
   HInstruction visitInvokeInterceptor(HInvokeInterceptor node) {
-    if (node.name == const SourceString('length') &&
-        node.inputs[1].isConstantString()) {
-      HConstant input = node.inputs[1];
-      StringConstant constant = input.constant;
-      DartString string = constant.value;
-      return graph.addConstantInt(string.length);
+    if (node.isLengthGetter()) {
+      HInstruction input = node.inputs[1];
+      if (input.isConstantString()) {
+        HConstant constantInput = input;
+        StringConstant constant = constantInput.constant;
+        return graph.addConstantInt(constant.length);
+      } else if (input.isConstantList()) {
+        HConstant constantInput = input;
+        ListConstant constant = constantInput.constant;
+        return graph.addConstantInt(constant.length);
+      } else if (input.isConstantMap()) {
+        HConstant constantInput = input;
+        MapConstant constant = constantInput.constant;
+        return graph.addConstantInt(constant.length);
+      }
+    }
+    return node;
+  }
+
+  HInstruction visitInvokeDynamic(HInvokeDynamic node) {
+    HType receiverType = node.receiver.propagatedType;
+    if (receiverType.isNonPrimitive()) {
+      HNonPrimitiveType type = receiverType;
+      Element element = type.lookupMember(node.name);
+      // TODO(ngeoffray): Also fold if it's a getter or variable.
+      if (element != null && element.isFunction()) {
+        FunctionElement method = element;
+        FunctionParameters parameters = method.computeParameters(compiler);
+        if (node.selector.applies(parameters)) {
+          if (parameters.optionalParameterCount == 0) {
+            node.element = element;
+          }
+          // TODO(ngeoffray): If the method has optional parameters,
+          // we should pass the default values here.
+        }
+      }
+    }
+    return node;
+  }
+
+  HInstruction fromInterceptorToDynamicInvocation(
+      HInvokeStatic node, SourceString methodName) {
+    HNonPrimitiveType type = node.inputs[1].propagatedType;
+    Element element = type.lookupMember(methodName);
+    HInvokeDynamicMethod result = new HInvokeDynamicMethod(
+        node.selector,
+        methodName,
+        node.inputs.getRange(1, node.inputs.length - 1));
+    result.element = element;
+    return result;
+  }
+
+  HInstruction visitIndex(HIndex node) {
+    if (node.receiver.isNonPrimitive()) {
+      SourceString methodName = Elements.constructOperatorName(
+          const SourceString('operator'), const SourceString('[]'));
+      return fromInterceptorToDynamicInvocation(node, methodName);
+    }
+    return node;
+  }
+
+  HInstruction visitIndexAssign(HIndexAssign node) {
+    if (node.receiver.isNonPrimitive()) {
+      SourceString methodName = Elements.constructOperatorName(
+          const SourceString('operator'), const SourceString('[]='));
+      return fromInterceptorToDynamicInvocation(node, methodName);
     }
     return node;
   }
@@ -167,26 +232,65 @@ class SsaConstantFolder extends HBaseVisitor implements OptimizationPhase {
       Constant folded = operation.fold(op1.constant, op2.constant);
       if (folded !== null) return graph.addConstant(folded);
     }
+
+    if (left.isNonPrimitive() && node.operation.isUserDefinable()) {
+      SourceString methodName = Elements.constructOperatorName(
+          const SourceString('operator'), node.operation.name);
+      return fromInterceptorToDynamicInvocation(node, methodName);
+    }
     return node;
   }
 
   HInstruction visitEquals(HEquals node) {
     HInstruction left = node.left;
     HInstruction right = node.right;
-    if (!left.isConstant() && right.isConstantNull()) {
-      // TODO(floitsch): cache interceptors.
-      HStatic target = new HStatic(
-          compiler.builder.interceptors.getEqualsNullInterceptor());
-      node.block.addBefore(node,target);
-      return new HEquals(target, node.left, node.right);
+
+    if (left.isConstant() && right.isConstant()) {
+      return visitInvokeBinary(node);
     }
+
+    if (left.isNonPrimitive()) {
+      HNonPrimitiveType type = left.propagatedType;
+      Element element = type.lookupMember(Namer.OPERATOR_EQUALS);
+      if (element !== null) {
+        // If the left-hand side is guaranteed to be a non-primitive
+        // type and and it defines operator==, we emit a call to that
+        // operator.
+        return visitInvokeBinary(node);
+      } else if (right.isConstantNull()) {
+        return graph.addConstantBool(false);
+      } else {
+        // We can just emit an identity check because the type does
+        // not implement operator=.
+        // TODO(floitsch): cache interceptors.
+        HStatic target = new HStatic(
+            compiler.builder.interceptors.getTripleEqualsInterceptor());
+        node.block.addBefore(node, target);
+        return new HIdentity(target, left, right);
+      }
+    }
+
+
+    if (right.isConstantNull()) {
+      if (left.propagatedType.isUseful()) {
+        return graph.addConstantBool(false);
+      } else {
+        // TODO(floitsch): cache interceptors.
+        HStatic target = new HStatic(
+            compiler.builder.interceptors.getEqualsNullInterceptor());
+        node.block.addBefore(node, target);
+        return new HEquals(target, node.left, node.right);
+      }
+    }
+
     // All other cases are dealt with by the [visitInvokeBinary].
     return visitInvokeBinary(node);
   }
 
   HInstruction visitTypeGuard(HTypeGuard node) {
     HInstruction value = node.guarded;
-    return (value.type.combine(node.type) == value.type) ? value : node;
+    HType combinedType = value.propagatedType.combine(node.guardedType);
+    return (combinedType == value.propagatedType) ? value : node;
   }
 
   HInstruction visitIntegerCheck(HIntegerCheck node) {
@@ -195,12 +299,13 @@ class SsaConstantFolder extends HBaseVisitor implements OptimizationPhase {
   }
 
   HInstruction visitIs(HIs node) {
-    Element element = node.typeExpression;
+    Type type = node.typeName;
+    Element element = type.element;
     if (element.kind === ElementKind.TYPE_VARIABLE) {
       compiler.unimplemented("visitIs for type variables");
     }
 
-    HType expressionType = node.expression.type;
+    HType expressionType = node.expression.propagatedType;
     if (element === compiler.objectClass
         || element === compiler.dynamicClass) {
       return graph.addConstantBool(true);
@@ -283,7 +388,7 @@ class SsaCheckInserter extends HBaseVisitor implements OptimizationPhase {
         const SourceString("length"),
         true,
         <HInstruction>[interceptor, receiver]);
-    length.type = HType.NUMBER;
+    length.propagatedType = HType.INTEGER;
     node.block.addBefore(node, length);
 
     HBoundsCheck check = new HBoundsCheck(length, index);
@@ -298,9 +403,12 @@ class SsaCheckInserter extends HBaseVisitor implements OptimizationPhase {
   }
 
   void visitIndex(HIndex node) {
-    if (!node.builtin) return;
-    if (node.index is HBoundsCheck) return;
-    HInstruction index = insertIntegerCheck(node, node.index);
+    if (!node.receiver.isStringOrArray()) return;
+    HInstruction index = node.index;
+    if (index is HBoundsCheck) return;
+    if (!node.index.isInteger()) {
+      index = insertIntegerCheck(node, index);
+    }
     index = insertBoundsCheck(node, node.receiver, index);
     HIndex newInstruction = new HIndex(node.target, node.receiver, index);
     node.block.addBefore(node, newInstruction);
@@ -309,9 +417,12 @@ class SsaCheckInserter extends HBaseVisitor implements OptimizationPhase {
   }
 
   void visitIndexAssign(HIndexAssign node) {
-    if (!node.builtin) return;
-    if (node.index is HBoundsCheck) return;
-    HInstruction index = insertIntegerCheck(node, node.index);
+    if (!node.receiver.isMutableArray()) return;
+    HInstruction index = node.index;
+    if (index is HBoundsCheck) return;
+    if (!node.index.isInteger()) {
+      index = insertIntegerCheck(node, index);
+    }
     index = insertBoundsCheck(node, node.receiver, index);
     HIndexAssign newInstruction =
         new HIndexAssign(node.target, node.receiver, index, node.value);
@@ -471,7 +582,8 @@ class SsaGlobalValueNumberer implements OptimizationPhase {
       HBasicBlock block = graph.blocks[i];
       if (block.isLoopHeader()) {
         int changesFlags = loopChangesFlags[block.id];
-        HBasicBlock last = block.loopInformation.getLastBackEdge();
+        HLoopInformation info = block.blockInformation;
+        HBasicBlock last = info.getLastBackEdge();
         for (int j = block.id; j <= last.id; j++) {
           moveLoopInvariantCodeFromBlock(graph.blocks[j], block, changesFlags);
         }

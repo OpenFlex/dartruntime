@@ -108,8 +108,13 @@ class DartGenerator(object):
           new_interface = database.GetInterface(new_name)
           MergeNodes(new_interface, interface)
         
-        interface.javascript_binding_name = (old_name if rename_javascript_binding_names
-            else new_name)
+        if rename_javascript_binding_names:
+          interface.javascript_binding_name = new_name
+          interface.doc_js_name = new_name
+          for member in (interface.operations + interface.constants
+              + interface.attributes):
+            member.doc_js_interface_name = new_name
+
  
     # Fix references:
     for interface in database.GetInterfaces():
@@ -228,6 +233,7 @@ class DartGenerator(object):
     self._database = database
     self._output_dir = output_dir
 
+    self._FixEventTargets()
     self._ComputeInheritanceClosure()
 
     self._systems = []
@@ -295,7 +301,8 @@ class DartGenerator(object):
           TemplateLoader(self._template_dir,
                          ['html/dartium', 'html/impl', 'html', ''],
                          {'DARTIUM': True, 'FROG': False}),
-          self._database, self._emitters, self._output_dir, self)
+          self._database, self._emitters, self._auxiliary_dir,
+          self._output_dir, self)
 
       html_system._interface_system = html_interface_system
       self._systems.append(html_system)
@@ -351,7 +358,6 @@ class DartGenerator(object):
     for system in self._systems:
       system.Finish()
 
-
   def _PreOrderInterfaces(self, interfaces):
     """Returns the interfaces in pre-order, i.e. parents first."""
     seen = set()
@@ -394,7 +400,7 @@ class DartGenerator(object):
         generator.AddConstant(const)
 
     attributes = [attr for attr in interface.attributes
-                  if not self._IsEventAttribute(interface, attr)]
+                  if attr.type.id != 'EventListener']
     for (getter, setter) in  _PairUpAttributes(attributes):
       for generator in generators:
         generator.AddAttribute(getter, setter)
@@ -452,12 +458,6 @@ class DartGenerator(object):
       generator.FinishInterface()
     return
 
-  def _IsEventAttribute(self, interface, attr):
-    # Remove EventListener attributes like 'onclick' when addEventListener
-    # is available.
-    return (attr.type.id == 'EventListener' and
-        'EventTarget' in self._AllImplementedInterfaces(interface))
-
   def _TransitiveSecondaryParents(self, interface):
     """Returns a list of all non-primary parents.
 
@@ -499,6 +499,14 @@ class DartGenerator(object):
     _logger.info('Flush...')
     self._emitters.Flush()
 
+  def _FixEventTargets(self):
+    for interface in self._database.GetInterfaces():
+      # Create fake EventTarget parent interface for interfaces that have
+      # 'EventTarget' extended attribute.
+      if 'EventTarget' in interface.ext_attrs:
+        ast = [('Annotation', [('Id', 'WebKit')]),
+               ('InterfaceType', ('ScopedName', 'EventTarget'))]
+        interface.parents.append(idlnode.IDLParentInterface(ast))
 
   def _ComputeInheritanceClosure(self):
     def Collect(interface, seen, collected):

@@ -24,7 +24,7 @@ class SsaInstructionMerger extends HBaseVisitor {
 
   bool usedOnlyByPhis(instruction) {
     for (HInstruction user in instruction.usedBy) {
-      if (user is !HPhi) return false;
+      if (user is! HPhi) return false;
     }
     return true;
   }
@@ -35,7 +35,8 @@ class SsaInstructionMerger extends HBaseVisitor {
     for (HInstruction input in instruction.inputs) {
       if (!generateAtUseSite.contains(input)
           && !input.isCodeMotionInvariant()
-          && input.usedBy.length == 1) {
+          && input.usedBy.length == 1
+          && input is! HPhi) {
         expectedInputs.add(input);
       }
     }
@@ -91,16 +92,35 @@ class SsaInstructionMerger extends HBaseVisitor {
 
     // Pop instructions from expectedInputs until instruction is found.
     // Return true if it is found, or false if not.
-    bool findInInputs(HInstruction instruction) {
+    bool findInInputsAndPopNonMatching(HInstruction instruction) {
       while (!expectedInputs.isEmpty()) {
         HInstruction nextInput = expectedInputs.removeLast();
         assert(!generateAtUseSite.contains(nextInput));
         assert(nextInput.usedBy.length == 1);
-        if (nextInput == instruction) {
+        if (nextInput === instruction) {
           return true;
         }
       }
       return false;
+    }
+
+    for (HBasicBlock successor in block.successors) {
+      // Only add the input of the first phi. Making inputs of
+      // later phis generate-at-use-site would make them move
+      // accross the assignment of the first phi, and we need
+      // more analysis before we can do that.
+      HPhi phi = successor.phis.first;
+      if (phi != null) {
+        int index = successor.predecessors.indexOf(block);
+        HInstruction input = phi.inputs[index];
+        if (!generateAtUseSite.contains(input)
+            && !input.isCodeMotionInvariant()
+            && input.usedBy.length == 1
+            && input is! HPhi) {
+          expectedInputs.add(input);
+        }
+        break;
+      }
     }
 
     block.last.accept(this);
@@ -114,24 +134,19 @@ class SsaInstructionMerger extends HBaseVisitor {
         generateAtUseSite.add(instruction);
         continue;
       }
-      bool foundInInputs = false;
       // See if the current instruction is the next non-trivial
-      // expected input. If not, drop the expectedInputs and
-      // start over.
-      if (findInInputs(instruction)) {
-        foundInInputs = true;
+      // expected input.
+      if (findInInputsAndPopNonMatching(instruction)) {
         tryGenerateAtUseSite(instruction);
       } else {
         assert(expectedInputs.isEmpty());
       }
-      if (foundInInputs || usedOnlyByPhis(instruction)) {
-        // Try merging all non-trivial inputs.
-        instruction.accept(this);
-      }
+      instruction.accept(this);
     }
 
     if (block.predecessors.length === 1
         && isBlockSinglePredecessor(block.predecessors[0])) {
+      assert(block.phis.isEmpty());
       tryMergingExpressions(block.predecessors[0]);
     } else {
       expectedInputs = null;
@@ -163,43 +178,94 @@ class SsaConditionMerger extends HGraphVisitor {
    * generated at use-site.
    */
   bool isExpression(HInstruction instruction, HBasicBlock limit) {
-    if (instruction is HPhi && !logicalOperations.containsKey(instruction)) {
-      return false;
-    }
-    while (instruction.previous != null) {
-      instruction = instruction.previous;
-      if (!generateAtUseSite.contains(instruction)) {
+    HBasicBlock block = instruction.block;
+    if (instruction is HPhi) {
+      if (!logicalOperations.containsKey(instruction)) {
         return false;
       }
+    } else {
+      while (instruction.previous != null) {
+        instruction = instruction.previous;
+        if (!generateAtUseSite.contains(instruction)) {
+          return false;
+        }
+      }
+      // Now [instruction] is the first instruction of the block
+      // (aka [block.first]). If there are also a phi, check the current
+      // [instruction] normally and make [instruction] be the phi.
+      if (!block.phis.isEmpty()) {
+        if (!generateAtUseSite.contains(instruction)) {
+          return false;
+        }
+        instruction = block.phis.last;
+        if (block.phis.first !== instruction) {
+          // If there is more than one phi, don't try to undestand it.
+          return false;
+        }
+        if (!logicalOperations.containsKey(instruction)) {
+          return false;
+        }
+      }
     }
-    HBasicBlock block = instruction.block;
-    if (!block.phis.isEmpty()) return false;
-    if (instruction is HPhi && logicalOperations.containsKey(instruction)) {
+    if (instruction is HPhi) {
+      assert(logicalOperations.containsKey(instruction));
       return isExpression(instruction.inputs[0], limit);
     }
-    return block.predecessors.length == 1 && block.predecessors[0] == limit;
+    if (block.predecessors.length !== 1) {
+      return false;
+    }
+    HBasicBlock previousBlock = block.predecessors[0];
+    if (previousBlock === limit) return true;
+    if (previousBlock.successors.length !== 1 ||
+        previousBlock.last is! HGoto) {
+      return false;
+    }
+    return isExpression(previousBlock.last, limit);
   }
 
   void replaceWithLogicalOperator(HPhi phi, String type) {
     if (canGenerateAtUseSite(phi)) generateAtUseSite.add(phi);
     logicalOperations[phi] = type;
+    // If the phi corresponds to logical control flow, mark the
+    // control-flow instructions as generate-at-use-site.
+    generateAtUseSite.add(phi.block.predecessors[0].last);
+    generateAtUseSite.add(phi.block.predecessors[1].last);
+    // If the first input is only used as branch condition and result, it too
+    // can be generate-at-use-site.
+    if (phi.inputs[0].usedBy.length == 2) {
+      generateAtUseSite.add(phi.inputs[0]);
+    }
+    if (phi.inputs[1].usedBy.length == 1) {
+      generateAtUseSite.add(phi.inputs[1]);
+    }
   }
 
   bool canGenerateAtUseSite(HPhi phi) {
-    if (phi.usedBy.length != 1) return false;
+    if (phi.usedBy.length != 1) {
+      return false;
+    }
     assert(phi.next == null);
     HInstruction use = phi.usedBy[0];
 
     HInstruction current = phi.block.first;
     while (current != use) {
-      if (!generateAtUseSite.contains(current)) return false;
+      // Check that every instruction between the start of the block and the
+      // use of the phi (i.e., every instruction between the phi and the use)
+      // is itself generated at use site. That means that the phi can be
+      // moved to its use site without crossing any other code, because those
+      // instructions (if any) are moved too.
+      if (current is! HControlFlow && !generateAtUseSite.contains(current)) {
+        return false;
+      }
       if (current.next != null) {
         current = current.next;
       } else if (current is HPhi) {
         current = current.block.first;
       } else {
         assert(current is HControlFlow);
-        if (current is !HGoto) return false;
+        if (current is !HGoto) {
+          return false;
+        }
         HBasicBlock nextBlock = current.block.successors[0];
         if (!nextBlock.phis.isEmpty()) {
           current = nextBlock.phis.first;
@@ -211,6 +277,23 @@ class SsaConditionMerger extends HGraphVisitor {
     return true;
   }
 
+  HInstruction previousInstruction(HInstruction instruction) {
+    if (instruction.previous != null) return instruction.previous;
+    HBasicBlock block = instruction.block;
+    if (instruction is! HPhi) {
+      if (block.phis.last != null) return block.phis.last;
+    }
+    if (block.predecessors.length == 1) {
+      HBasicBlock previousBlock = block.predecessors[0];
+      if (previousBlock.last is HGoto) {
+        assert(previousBlock.successors.length == 1);
+        assert(previousBlock.successors[0] === block);
+        return previousInstruction(previousBlock.last);
+      }
+    }
+    return null;
+  }
+
   void detectLogicControlFlow(HPhi phi) {
     // Check for the most common pattern for a short-circuit logic operation:
     //   B0 b0 = ...; if (b0) goto B1 else B2 (or: if (!b0) goto B2 else B1)
@@ -219,12 +302,11 @@ class SsaConditionMerger extends HGraphVisitor {
     //   |/
     //   B2 b2 = phi(b0,b1); if(b2) ...
     // TODO(lrn): Also recognize ?:-flow?
-
     if (phi.inputs.length != 2) return;
     HInstruction first = phi.inputs[0];
-    HBasicBlock firstBlock = first.block;
+    HBasicBlock firstBlock = phi.block.predecessors[0];
     HInstruction second = phi.inputs[1];
-    HBasicBlock secondBlock = second.block;
+    HBasicBlock secondBlock = phi.block.predecessors[1];
     // Check second input of phi being an expression followed by a goto.
     if (second.usedBy.length != 1) return;
     HInstruction secondNext =
@@ -236,36 +318,32 @@ class SsaConditionMerger extends HGraphVisitor {
     // Check first input of phi being followed by a (possibly negated)
     // conditional branch based on the same value.
     if (firstBlock != phi.block.dominator) return;
-    if (firstBlock.last is !HConditionalBranch) return;
-    HConditionalBranch firstBranch = firstBlock.last;
-    // Must be used both for value and for control to avoid the second branch.
-    if (first.usedBy.length != 2) return;
+    if (firstBlock.last is! HIf) return;
     if (firstBlock.successors[1] != phi.block) return;
-    HInstruction firstNext = (first is HPhi) ? firstBlock.first : first.next;
-    if (firstNext == firstBranch &&
-        firstBranch.condition == first) {
+    HIf firstBranch = firstBlock.last;
+    HInstruction condition = firstBranch.inputs[0];
+    if (condition === first) {
       replaceWithLogicalOperator(phi, "&&");
-    } else if (firstNext is HNot &&
-               firstNext.inputs[0] == first &&
-               generateAtUseSite.contains(firstNext) &&
-               firstNext.next == firstBlock.last &&
-               firstBranch.condition == firstNext) {
+    } else if (condition is HNot &&
+               condition.inputs[0] == first) {
       replaceWithLogicalOperator(phi, "||");
-    } else {
-      return;
+      // If the negation is only used by this logical operation, or only by
+      // logical operators in general, it won't need to be generated.
+      if (!generateAtUseSite.contains(condition)) {
+        for (HInstruction user in condition.usedBy) {
+          if (user is! HIf || !generateAtUseSite.contains(user)) {
+            return;
+          }
+        }
+        generateAtUseSite.add(condition);
+      }
     }
-    // Detected as logic control flow. Mark the corresponding
-    // inputs as generated at use site. These will now be generated
-    // as part of an expression.
-    generateAtUseSite.add(first);
-    generateAtUseSite.add(firstBlock.last);
-    generateAtUseSite.add(second);
-    generateAtUseSite.add(secondBlock.last);
+    return;
   }
 
   void visitBasicBlock(HBasicBlock block) {
     if (!block.phis.isEmpty() &&
-        block.phis.first == block.phis.last) {
+        block.phis.first === block.phis.last) {
       detectLogicControlFlow(block.phis.first);
     }
   }

@@ -101,7 +101,7 @@ _html_library_renames = {
 #TODO(jacobr): inject annotations into the interfaces based on this table and
 # on _html_library_renames.
 _injected_doc_fragments = {
-    'Element.query': '  /** @domName querySelector, Document.getElementById */',
+    'Element.query': '  /** @domName Element.querySelector, Document.getElementById */',
 }
 # Members and classes from the dom that should be removed completelly from
 # dart:html.  These could be expressed in the IDL instead but expressing this
@@ -295,26 +295,38 @@ _on_attribute_to_event_name_mapping = {
 # to add the lower case to camel case conversion for that event name here.
 _html_event_names = {
   'DOMContentLoaded': 'contentLoaded',
-  'touchleave': 'touchLeave',
   'abort': 'abort',
+  'addstream': 'addStream',
+  'addtrack': 'addTrack',
+  'audioend': 'audioEnd',
+  'audioprocess': 'audioProcess',
+  'audiostart': 'audioStart',
   'beforecopy': 'beforeCopy',
   'beforecut': 'beforeCut',
   'beforepaste': 'beforePaste',
   'beforeunload': 'beforeUnload',
+  'blocked': 'blocked',
   'blur': 'blur',
   'cached': 'cached',
   'canplay': 'canPlay',
   'canplaythrough': 'canPlayThrough',
   'change': 'change',
+  'chargingchange': 'chargingChange',
+  'chargingtimechange': 'chargingTimeChange',
   'checking': 'checking',
   'click': 'click',
   'close': 'close',
+  'complete': 'complete',
+  'connect': 'connect',
+  'connecting': 'connecting',
   'contextmenu': 'contextMenu',
   'copy': 'copy',
+  'cuechange': 'cueChange',
   'cut': 'cut',
   'dblclick': 'doubleClick',
   'devicemotion': 'deviceMotion',
   'deviceorientation': 'deviceOrientation',
+  'dischargingtimechange': 'dischargingTimeChange',
   'display': 'display',
   'downloading': 'downloading',
   'drag': 'drag',
@@ -326,8 +338,11 @@ _html_event_names = {
   'drop': 'drop',
   'durationchange': 'durationChange',
   'emptied': 'emptied',
+  'end': 'end',
   'ended': 'ended',
+  'enter': 'enter',
   'error': 'error',
+  'exit': 'exit',
   'focus': 'focus',
   'hashchange': 'hashChange',
   'input': 'input',
@@ -335,6 +350,7 @@ _html_event_names = {
   'keydown': 'keyDown',
   'keypress': 'keyPress',
   'keyup': 'keyUp',
+  'levelchange': 'levelChange',
   'load': 'load',
   'loadeddata': 'loadedData',
   'loadedmetadata': 'loadedMetadata',
@@ -347,6 +363,7 @@ _html_event_names = {
   'mouseover': 'mouseOver',
   'mouseup': 'mouseUp',
   'mousewheel': 'mouseWheel',
+  'nomatch': 'noMatch',
   'noupdate': 'noUpdate',
   'obsolete': 'obsolete',
   'offline': 'offline',
@@ -362,8 +379,11 @@ _html_event_names = {
   'progress': 'progress',
   'ratechange': 'rateChange',
   'readystatechange': 'readyStateChange',
+  'removestream': 'removeStream',
   'reset': 'reset',
   'resize': 'resize',
+  'result': 'result',
+  'resultdeleted': 'resultDeleted',
   'scroll': 'scroll',
   'search': 'search',
   'seeked': 'seeked',
@@ -372,18 +392,27 @@ _html_event_names = {
   'selectionchange': 'selectionChange',
   'selectstart': 'selectStart',
   'show': 'show',
+  'soundend': 'soundEnd',
+  'soundstart': 'soundStart',
+  'speechend': 'speechEnd',
+  'speechstart': 'speechStart',
   'stalled': 'stalled',
+  'start': 'start',
+  'statechange': 'stateChange',
   'storage': 'storage',
   'submit': 'submit',
+  'success': 'success',
   'suspend': 'suspend',
   'timeupdate': 'timeUpdate',
   'touchcancel': 'touchCancel',
   'touchend': 'touchEnd',
   'touchenter': 'touchEnter',
+  'touchleave': 'touchLeave',
   'touchmove': 'touchMove',
   'touchstart': 'touchStart',
   'unload': 'unload',
   'updateready': 'updateReady',
+  'versionchange': 'versionChange',
   'volumechange': 'volumeChange',
   'waiting': 'waiting',
   'webkitAnimationEnd': 'animationEnd',
@@ -391,8 +420,15 @@ _html_event_names = {
   'webkitAnimationStart': 'animationStart',
   'webkitfullscreenchange': 'fullscreenChange',
   'webkitfullscreenerror': 'fullscreenError',
+  'webkitkeyadded': 'keyAdded',
+  'webkitkeyerror': 'keyError',
+  'webkitkeymessage': 'keyMessage',
+  'webkitneedkey': 'needKey',
   'webkitSpeechChange': 'speechChange',
-  'webkitTransitionEnd': 'transitionEnd'
+  'webkitTransitionEnd': 'transitionEnd',
+  'write': 'write',
+  'writeend': 'writeEnd',
+  'writestart': 'writeStart'
 }
 
 # These classes require an explicit declaration for the "on" method even though
@@ -520,7 +556,7 @@ class HtmlSystemShared(object):
   # generate if it should.
   def GetEventAttributes(self, interface):
     events =  set([attr for attr in interface.attributes
-                   if self._generator._IsEventAttribute(interface, attr)])
+                   if attr.type.id == 'EventListener'])
 
     if events or interface.id in _html_explicit_event_classes:
       return True, events
@@ -637,11 +673,15 @@ class HtmlDartInterfaceGenerator(DartInterfaceGenerator):
       extends_str += ' default ' + factory_provider
 
     # TODO(vsm): Add appropriate package / namespace syntax.
-    (self._members_emitter,
+    (self._type_comment_emitter,
+     self._members_emitter,
      self._top_level_emitter) = self._emitter.Emit(
          self._template + '$!TOP_LEVEL',
          ID=typename,
          EXTENDS=extends_str)
+
+    self._type_comment_emitter.Emit("/// @domName $DOMNAME",
+        DOMNAME=self._interface.doc_js_name)
 
     if constructor_info:
       self._members_emitter.Emit(
@@ -688,9 +728,10 @@ class HtmlDartInterfaceGenerator(DartInterfaceGenerator):
     # We don't yet handle inconsistent renames of the getter and setter yet.
     if html_getter_name and html_setter_name:
       assert html_getter_name == html_setter_name
-    if html_getter_name != dom_name:
-      self._members_emitter.Emit('\n  /** @domName $DOMNAME */',
-          DOMNAME = dom_name)
+
+    self._members_emitter.Emit('\n  /** @domName $DOMINTERFACE.$DOMNAME */',
+        DOMINTERFACE=getter.doc_js_interface_name,
+        DOMNAME=dom_name)
     if (getter and setter and
         DartType(getter.type.id) == DartType(setter.type.id)):
       self._members_emitter.Emit('\n  $TYPE $NAME;\n',
@@ -714,9 +755,9 @@ class HtmlDartInterfaceGenerator(DartInterfaceGenerator):
     html_name = self._shared.RenameInHtmlLibrary(
         self._interface, info.name)
     if html_name and not self._shared.IsPrivate(html_name):
-      if html_name != info.name:
-        self._members_emitter.Emit('\n  /** @domName $DOMNAME */',
-            DOMNAME = info.name)
+      self._members_emitter.Emit('\n  /** @domName $DOMINTERFACE.$DOMNAME */',
+          DOMINTERFACE=info.overloads[0].doc_js_interface_name,
+          DOMNAME=info.name)
 
       self._members_emitter.Emit('\n'
                                  '  $TYPE $NAME($PARAMS);\n',
@@ -750,8 +791,13 @@ class HtmlDartInterfaceGenerator(DartInterfaceGenerator):
         raise Exception('No known html even name for event: ' + event_name)
 
   def _EmitEventGetter(self, events_interface):
-    self._members_emitter.Emit('\n  $TYPE get on();\n',
-                               TYPE=events_interface)
+    self._members_emitter.Emit(
+        '\n  /**'
+        '\n   * @domName EventTarget.addEventListener, '
+        'EventTarget.removeEventListener, EventTarget.dispatchEvent'
+        '\n   */'
+        '\n  $TYPE get on();\n',
+        TYPE=events_interface)
 
 # ------------------------------------------------------------------------------
 
@@ -1094,13 +1140,15 @@ class HtmlFrogSystem(HtmlSystem):
 
 class HtmlDartiumSystem(HtmlSystem):
 
-  def __init__(self, templates, database, emitters, output_dir, generator):
+  def __init__(self, templates, database, emitters, auxiliary_dir, output_dir,
+               generator):
     """Prepared for generating wrapping implementation.
 
     - Creates emitter for Dart code.
     """
     super(HtmlDartiumSystem, self).__init__(
         templates, database, emitters, output_dir, generator)
+    self._auxiliary_dir = auxiliary_dir
     self._shared = HtmlSystemShared(database, generator)
     self._dart_dartium_file_paths = []
     self._wrap_cases = []
@@ -1133,6 +1181,8 @@ class HtmlDartiumSystem(HtmlSystem):
 
   def GenerateLibraries(self, lib_dir):
     # Library generated for implementation.
+    auxiliary_dir = os.path.relpath(self._auxiliary_dir, self._output_dir)
+
     self._GenerateLibFile(
         'html_dartium.darttemplate',
         os.path.join(lib_dir, 'html_dartium.dart'),
@@ -1140,6 +1190,7 @@ class HtmlDartiumSystem(HtmlSystem):
          self._interface_system._dart_callback_file_paths +
          self._dart_dartium_file_paths
          ),
+        AUXILIARY_DIR=MassagePath(auxiliary_dir),
         WRAPCASES='\n'.join(self._wrap_cases))
 
   def Finish(self):
@@ -1284,17 +1335,16 @@ class HtmlDartiumInterfaceGenerator(object):
         PARAMETERS=constructor_info.ParametersImplementationDeclaration(),
         NAMED_CONSTRUCTOR=constructor_info.name or interface_name,
         ARGUMENTS=self._UnwrappedParameters(constructor_info,
-                                            len(constructor_info.arg_infos)))
+                                            len(constructor_info.param_infos)))
 
   def _UnwrappedParameters(self, operation_info, length):
     """Returns string for an argument list that unwraps first |length|
     parameters."""
-    def UnwrapArgInfo(arg_info):
-      (name, type, value) = arg_info
+    def UnwrapParamInfo(param_info):
       # TODO(sra): Type dependent unwrapping.
-      return '_unwrap(%s)' % name
+      return '_unwrap(%s)' % param_info.name
 
-    return ', '.join(map(UnwrapArgInfo, operation_info.arg_infos[:length]))
+    return ', '.join(map(UnwrapParamInfo, operation_info.param_infos[:length]))
 
   def _BaseClassName(self, interface):
     if not interface.parents:
@@ -1576,7 +1626,7 @@ class HtmlDartiumInterfaceGenerator(object):
     def TypeCheck(name, type):
       return '%s is %s' % (name, type)
 
-    if position == len(info.arg_infos):
+    if position == len(info.param_infos):
       if len(overloads) > 1:
         raise Exception('Duplicate operations ' + str(overloads))
       operation = overloads[0]
@@ -1591,7 +1641,7 @@ class HtmlDartiumInterfaceGenerator(object):
     positive = []
     negative = []
     first_overload = overloads[0]
-    (param_name, param_type, param_default) = info.arg_infos[position]
+    param = info.param_infos[position]
 
     if position < len(first_overload.arguments):
       # FIXME: This will not work if the second overload has a more
@@ -1599,12 +1649,12 @@ class HtmlDartiumInterfaceGenerator(object):
       # void foo(Node x);
       # void foo(Element x);
       type = DartType(first_overload.arguments[position].type.id)
-      test = TypeCheck(param_name, type)
+      test = TypeCheck(param.name, type)
       pred = lambda op: (len(op.arguments) > position and
           DartType(op.arguments[position].type.id) == type)
     else:
       type = None
-      test = NullCheck(param_name)
+      test = NullCheck(param.name)
       pred = lambda op: position >= len(op.arguments)
 
     for overload in overloads:
@@ -1636,7 +1686,7 @@ class HtmlDartiumInterfaceGenerator(object):
     # will have done the test already. (It could be null too but we ignore that
     # case since all the overload behave the same and we don't know which types
     # in the IDL are not nullable.)
-    if type == param_type:
+    if type == param.dart_type:
       return self.GenerateDispatch(
           emitter, info, indent, position + 1, positive)
 
