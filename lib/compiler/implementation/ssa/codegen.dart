@@ -733,7 +733,8 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
         } else {
           define(instruction);
         }
-        // Control flow instructions know how to handle ';'.
+        // Control flow instructions, and some other instructions,
+        // know how to handle ';'.
         if (instruction is !HControlFlow && instruction is !HTypeGuard &&
             !isGeneratingExpression()) {
           buffer.add(';\n');
@@ -1027,6 +1028,22 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
         // If we know we're calling a specific method, register that
         // method only.
         compiler.registerDynamicInvocationOf(node.element);
+      } else if (node.inputs[0] is HThis) {
+        // TODO(ngeoffray): We should propagate an union type in
+        // earlier phases instead of just checking if the receiver is 'this'.
+        ClassElement cls = work.element.enclosingElement;
+        Element method = cls.lookupMember(node.name);
+        if (method !== null) {
+          // Make sure the method (whether in this class or in a
+          // superclass) is compiled.
+          // TODO(ngeoffray): Note that we could not emit this method
+          // if it is always being overridden and its holder is not
+          // instantiated.
+          compiler.registerDynamicInvocationOf(method);
+        }
+        Type type = cls.computeType(compiler);
+        compiler.registerDynamicInvocation(
+            node.name, new TypedInvocation(type, node.selector));
       } else {
         compiler.registerDynamicInvocation(node.name, node.selector);
       }
@@ -1102,15 +1119,16 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
   }
 
   visitFieldGet(HFieldGet node) {
-    String name = JsNames.getValid(node.element.name.slowToString());
     if (node.receiver !== null) {
+      String name =
+          compiler.namer.instanceFieldName(currentLibrary, node.element.name);
       beginExpression(JSPrecedence.MEMBER_PRECEDENCE);
       use(node.receiver, JSPrecedence.MEMBER_PRECEDENCE);
       buffer.add('.');
       buffer.add(name);
       beginExpression(JSPrecedence.MEMBER_PRECEDENCE);
     } else {
-      buffer.add(name);
+      buffer.add(JsNames.getValid(node.element.name.slowToString()));
     }
   }
 
@@ -1119,8 +1137,10 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     // If we are generating an expression, those variable declarations
     // must be delayed until later.
     bool delayDeclaration = false;
-    String name = JsNames.getValid(node.element.name.slowToString());
+    String name;
     if (node.receiver !== null) {
+      name =
+          compiler.namer.instanceFieldName(currentLibrary, node.element.name);
       beginExpression(JSPrecedence.ASSIGNMENT_PRECEDENCE);
       use(node.receiver, JSPrecedence.MEMBER_PRECEDENCE);
       buffer.add('.');
@@ -1128,6 +1148,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     } else {
       // TODO(ngeoffray): Remove the 'var' once we don't globally box
       // variables used in a try/catch.
+      name = JsNames.getValid(node.element.name.slowToString());
       declareVariable(name);
     }
     if (delayDeclaration) delayedVarDecl = delayedVarDecl.prepend(name);
@@ -1276,22 +1297,35 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
   }
 
   visitBoundsCheck(HBoundsCheck node) {
-    buffer.add('if (');
-    use(node.index, JSPrecedence.RELATIONAL_PRECEDENCE);
-    buffer.add(' < 0 || ');
-    use(node.index, JSPrecedence.RELATIONAL_PRECEDENCE);
-    buffer.add(' >= ');
-    use(node.length, JSPrecedence.SHIFT_PRECEDENCE);
-    buffer.add(") ");
+    // TODO(ngeoffray): Separate the two checks of the bounds check, so,
+    // e.g., the zero checks can be shared if possible.
+
+    // If the checks always succeede, we would have removed the bounds check
+    // completely.
+    assert(node.staticChecks != HBoundsCheck.ALWAYS_TRUE);
+    if (node.staticChecks != HBoundsCheck.ALWAYS_FALSE) {
+      buffer.add('if (');
+      if (node.staticChecks != HBoundsCheck.ALWAYS_ABOVE_ZERO) {
+        assert(node.staticChecks == HBoundsCheck.FULL_CHECK);
+        use(node.index, JSPrecedence.RELATIONAL_PRECEDENCE);
+        buffer.add(' < 0 || ');
+      }
+      use(node.index, JSPrecedence.RELATIONAL_PRECEDENCE);
+      buffer.add(' >= ');
+      use(node.length, JSPrecedence.SHIFT_PRECEDENCE);
+      buffer.add(") ");
+    }
     generateThrowWithHelper('ioore', node.index);
   }
 
   visitIntegerCheck(HIntegerCheck node) {
-    buffer.add('if (');
-    use(node.value, JSPrecedence.EQUALITY_PRECEDENCE);
-    buffer.add(' !== (');
-    use(node.value, JSPrecedence.BITWISE_OR_PRECEDENCE);
-    buffer.add(" | 0)) ");
+    if (!node.alwaysFalse) {
+      buffer.add('if (');
+      use(node.value, JSPrecedence.EQUALITY_PRECEDENCE);
+      buffer.add(' !== (');
+      use(node.value, JSPrecedence.BITWISE_OR_PRECEDENCE);
+      buffer.add(" | 0)) ");
+    }
     generateThrowWithHelper('iae', node.value);
   }
 
