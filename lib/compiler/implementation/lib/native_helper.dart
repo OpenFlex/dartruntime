@@ -5,6 +5,7 @@
 String typeNameInChrome(obj) {
   String name = JS('String', "#.constructor.name", obj);
   if (name == 'Window') return 'DOMWindow';
+  if (name == 'CanvasPixelArray') return 'Uint8ClampedArray';
   return name;
 }
 
@@ -13,6 +14,7 @@ String typeNameInFirefox(obj) {
   if (name == 'Window') return 'DOMWindow';
   if (name == 'Document') return 'HTMLDocument';
   if (name == 'XMLDocument') return 'Document';
+  if (name == 'WorkerMessageEvent') return 'MessageEvent';
   return name;
 }
 
@@ -25,6 +27,9 @@ String typeNameInIE(obj) {
     if (JS('bool', '!!#.xmlVersion', obj)) return 'Document';
     return 'HTMLDocument';
   }
+  if (name == 'HTMLTableDataCellElement') return 'HTMLTableCellElement';
+  if (name == 'HTMLTableHeaderCellElement') return 'HTMLTableCellElement';
+  if (name == 'MSStyleCSSProperties') return 'CSSStyleDeclaration';
   return name;
 }
 

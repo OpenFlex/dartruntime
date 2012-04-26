@@ -63,7 +63,8 @@ class Namer {
   }
 
   String instanceFieldName(LibraryElement lib, SourceString name) {
-    return privateName(lib, name);
+    String proposedName = privateName(lib, name);
+    return safeName(proposedName);
   }
 
   String setterName(LibraryElement lib, SourceString name) {

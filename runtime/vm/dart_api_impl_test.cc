@@ -2938,6 +2938,169 @@ TEST_CASE(GetStaticField_RunsInitializer) {
 }
 
 
+TEST_CASE(New) {
+  const char* kScriptChars =
+      "class Test implements TestInterface {\n"
+      "  Test() : foo = 7 {}\n"
+      "  Test.named(value) : foo = value {}\n"
+      "  Test._hidden(value) : foo = -value {}\n"
+      "  Test.exception(value) : foo = value {\n"
+      "    throw 'ConstructorDeath';\n"
+      "  }\n"
+      "  factory Test.multiply(value) {\n"
+      "    return new Test.named(value * 100);\n"
+      "  }\n"
+      "  factory Test.nullo() {\n"
+      "    return null;\n"
+      "  }\n"
+      "  var foo;\n"
+      "}\n"
+      "\n"
+      "interface TestInterface default Test {\n"
+      "  TestInterface.named(value);\n"
+      "  TestInterface.multiply(value);\n"
+      "  TestInterface.notfound(value);\n"
+      "}\n";
+
+  Dart_Handle lib = TestCase::LoadTestScript(kScriptChars, NULL);
+  Dart_Handle cls = Dart_GetClass(lib, Dart_NewString("Test"));
+  EXPECT_VALID(cls);
+  Dart_Handle intf = Dart_GetClass(lib, Dart_NewString("TestInterface"));
+  EXPECT_VALID(intf);
+  Dart_Handle args[1];
+  args[0] = Dart_NewInteger(11);
+  Dart_Handle bad_args[1];
+  bad_args[0] = Dart_Error("myerror");
+
+  // Invoke the unnamed constructor.
+  Dart_Handle result = Dart_New(cls, Dart_Null(), 0, NULL);
+  EXPECT_VALID(result);
+  bool instanceof = false;
+  EXPECT_VALID(Dart_ObjectIsType(result, cls, &instanceof));
+  EXPECT(instanceof);
+  int64_t int_value = 0;
+  Dart_Handle foo = Dart_GetField(result, Dart_NewString("foo"));
+  EXPECT_VALID(Dart_IntegerToInt64(foo, &int_value));
+  EXPECT_EQ(7, int_value);
+
+  // Invoke the unnamed constructor with an empty string.
+  result = Dart_New(cls, Dart_NewString(""), 0, NULL);
+  EXPECT_VALID(result);
+  instanceof = false;
+  EXPECT_VALID(Dart_ObjectIsType(result, cls, &instanceof));
+  EXPECT(instanceof);
+  int_value = 0;
+  foo = Dart_GetField(result, Dart_NewString("foo"));
+  EXPECT_VALID(Dart_IntegerToInt64(foo, &int_value));
+  EXPECT_EQ(7, int_value);
+
+  // Invoke a named constructor.
+  result = Dart_New(cls, Dart_NewString("named"), 1, args);
+  EXPECT_VALID(result);
+  EXPECT_VALID(Dart_ObjectIsType(result, cls, &instanceof));
+  EXPECT(instanceof);
+  int_value = 0;
+  foo = Dart_GetField(result, Dart_NewString("foo"));
+  EXPECT_VALID(Dart_IntegerToInt64(foo, &int_value));
+  EXPECT_EQ(11, int_value);
+
+  // Invoke a hidden named constructor.
+  result = Dart_New(cls, Dart_NewString("_hidden"), 1, args);
+  EXPECT_VALID(result);
+  EXPECT_VALID(Dart_ObjectIsType(result, cls, &instanceof));
+  EXPECT(instanceof);
+  int_value = 0;
+  foo = Dart_GetField(result, Dart_NewString("foo"));
+  EXPECT_VALID(Dart_IntegerToInt64(foo, &int_value));
+  EXPECT_EQ(-11, int_value);
+
+  // Invoke a factory constructor.
+  result = Dart_New(cls, Dart_NewString("multiply"), 1, args);
+  EXPECT_VALID(result);
+  EXPECT_VALID(Dart_ObjectIsType(result, cls, &instanceof));
+  EXPECT(instanceof);
+  int_value = 0;
+  foo = Dart_GetField(result, Dart_NewString("foo"));
+  EXPECT_VALID(Dart_IntegerToInt64(foo, &int_value));
+  EXPECT_EQ(1100, int_value);
+
+  // Invoke a factory constructor which returns null.
+  result = Dart_New(cls, Dart_NewString("nullo"), 0, NULL);
+  EXPECT_VALID(result);
+  EXPECT(Dart_IsNull(result));
+
+  // Pass an error class object.  Error is passed through.
+  result = Dart_New(Dart_Error("myerror"), Dart_NewString("named"), 1, args);
+  EXPECT_ERROR(result, "myerror");
+
+  // Pass a bad class object.
+  result = Dart_New(Dart_Null(), Dart_NewString("named"), 1, args);
+  EXPECT_ERROR(result, "Dart_New expects argument 'clazz' to be non-null.");
+
+  // Pass a negative arg count.
+  result = Dart_New(cls, Dart_NewString("named"), -1, args);
+  EXPECT_ERROR(
+      result,
+      "Dart_New expects argument 'number_of_arguments' to be non-negative.");
+
+  // Pass the wrong arg count.
+  result = Dart_New(cls, Dart_NewString("named"), 0, NULL);
+  EXPECT_ERROR(result,
+               "Dart_New: wrong argument count for constructor 'Test.named': "
+               "expected 1 but saw 0.");
+
+  // Pass a bad argument.  Error is passed through.
+  result = Dart_New(cls, Dart_NewString("named"), 1, bad_args);
+  EXPECT_ERROR(result, "myerror");
+
+  // Pass a bad constructor name.
+  result = Dart_New(cls, Dart_NewInteger(55), 1, args);
+  EXPECT_ERROR(
+      result,
+      "Dart_New expects argument 'constructor_name' to be of type String.");
+
+  // Invoke a missing constructor.
+  result = Dart_New(cls, Dart_NewString("missing"), 1, args);
+  EXPECT_ERROR(result, "Dart_New: could not find constructor 'Test.missing'.");
+
+  // Invoke a constructor which throws an exception.
+  result = Dart_New(cls, Dart_NewString("exception"), 1, args);
+  EXPECT_ERROR(result, "ConstructorDeath");
+
+  // Invoke an interface constructor.
+  result = Dart_New(intf, Dart_NewString("named"), 1, args);
+  EXPECT_VALID(result);
+  EXPECT_VALID(Dart_ObjectIsType(result, cls, &instanceof));
+  EXPECT(instanceof);
+  int_value = 0;
+  foo = Dart_GetField(result, Dart_NewString("foo"));
+  EXPECT_VALID(Dart_IntegerToInt64(foo, &int_value));
+  EXPECT_EQ(11, int_value);
+
+  // Invoke an interface constructor which in turn calls a factory
+  // constructor.  Why not?
+  result = Dart_New(intf, Dart_NewString("multiply"), 1, args);
+  EXPECT_VALID(result);
+  EXPECT_VALID(Dart_ObjectIsType(result, cls, &instanceof));
+  EXPECT(instanceof);
+  int_value = 0;
+  foo = Dart_GetField(result, Dart_NewString("foo"));
+  EXPECT_VALID(Dart_IntegerToInt64(foo, &int_value));
+  EXPECT_EQ(1100, int_value);
+
+  // Invoke a constructor that is missing in the interface but present
+  // in the default class.
+  result = Dart_New(intf, Dart_Null(), 0, NULL);
+  EXPECT_ERROR(result,
+               "Dart_New: could not find constructor 'TestInterface.'.");
+
+  // Invoke a constructor that is present in the interface but missing
+  // in the default class.
+  result = Dart_New(intf, Dart_NewString("notfound"), 1, args);
+  EXPECT_ERROR(result, "Dart_New: could not find constructor 'Test.notfound'.");
+}
+
+
 TEST_CASE(Invoke) {
   const char* kScriptChars =
       "class BaseMethods {\n"
@@ -4540,111 +4703,6 @@ TEST_CASE(IsolateInterrupt) {
 
   // Give the spawned thread enough time to properly exit.
   Isolate::SetInterruptCallback(saved);
-}
-
-
-void InitNativeFields(Dart_NativeArguments args) {
-  Dart_EnterScope();
-  int count = Dart_GetNativeArgumentCount(args);
-  EXPECT_EQ(1, count);
-
-  Dart_Handle recv = Dart_GetNativeArgument(args, 0);
-  EXPECT(!Dart_IsError(recv));
-  Dart_Handle result = Dart_SetNativeInstanceField(recv, 0, 7);
-  EXPECT(!Dart_IsError(result));
-
-  Dart_ExitScope();
-}
-
-
-// The specific api functions called here are a bit arbitrary.  We are
-// trying to get a sense of the overhead for using the dart api.
-void UseDartApi(Dart_NativeArguments args) {
-  Dart_EnterScope();
-  int count = Dart_GetNativeArgumentCount(args);
-  EXPECT_EQ(3, count);
-
-  // Get the receiver.
-  Dart_Handle recv = Dart_GetNativeArgument(args, 0);
-  EXPECT(!Dart_IsError(recv));
-
-  // Get param1.
-  Dart_Handle param1 = Dart_GetNativeArgument(args, 1);
-  EXPECT(!Dart_IsError(param1));
-  EXPECT(Dart_IsInteger(param1));
-  bool fits = false;
-  Dart_Handle result = Dart_IntegerFitsIntoInt64(param1, &fits);
-  EXPECT(!Dart_IsError(result) && fits);
-  int64_t value1;
-  result = Dart_IntegerToInt64(param1, &value1);
-  EXPECT(!Dart_IsError(result));
-  EXPECT_LE(0, value1);
-  EXPECT_LE(value1, 1000000);
-
-  // Get native field from receiver.
-  intptr_t value2;
-  result = Dart_GetNativeInstanceField(recv, 0, &value2);
-  EXPECT(!Dart_IsError(result));
-  EXPECT_EQ(7, value2);
-
-  // Return param + receiver.field.
-  Dart_SetReturnValue(args, Dart_NewInteger(value1 * value2));
-  Dart_ExitScope();
-}
-
-
-static Dart_NativeFunction bm_uda_lookup(Dart_Handle name, int argument_count) {
-  const char* cstr = NULL;
-  Dart_Handle result = Dart_StringToCString(name, &cstr);
-  EXPECT(!Dart_IsError(result));
-  if (strcmp(cstr, "init") == 0) {
-    return InitNativeFields;
-  } else {
-    return UseDartApi;
-  }
-}
-
-
-TEST_CASE(Benchmark_UseDartApi) {
-  const char* kScriptChars =
-      "class Class extends NativeFieldsWrapper{\n"
-      "  int init() native 'init';\n"
-      "  int method(int param1, int param2) native 'method';\n"
-      "}\n"
-      "\n"
-      "double benchmark(int count) {\n"
-      "  Class c = new Class();\n"
-      "  c.init();\n"
-      "  Stopwatch sw = new Stopwatch.start();\n"
-      "  for (int i = 0; i < count; i++) {\n"
-      "    c.method(i,7);\n"
-      "  }\n"
-      "  sw.stop();\n"
-      "  return sw.elapsedInUs() / count;\n"
-      "}\n";
-
-  Dart_Handle lib = TestCase::LoadTestScript(
-      kScriptChars,
-      reinterpret_cast<Dart_NativeEntryResolver>(bm_uda_lookup));
-
-  // Create a native wrapper class with native fields.
-  Dart_Handle result = Dart_CreateNativeWrapperClass(
-      lib,
-      Dart_NewString("NativeFieldsWrapper"),
-      1);
-  EXPECT_VALID(result);
-
-  Dart_Handle args[1];
-  args[0] = Dart_NewInteger(100000);
-  result = Dart_Invoke(lib,
-                       Dart_NewString("benchmark"),
-                       1,
-                       args);
-  EXPECT_VALID(result);
-  EXPECT(Dart_IsDouble(result));
-  double out;
-  result = Dart_DoubleValue(result, &out);
-  fprintf(stderr, "Benchmark_UseDartApi: %f us per iteration\n", out);
 }
 
 #endif  // defined(TARGET_ARCH_IA32) || defined(TARGET_ARCH_X64).
