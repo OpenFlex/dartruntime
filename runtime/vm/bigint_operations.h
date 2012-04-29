@@ -16,7 +16,7 @@ class BigintOperations : public AllStatic {
   static RawBigint* NewFromUint64(uint64_t value,
                                   Heap::Space space = Heap::kNew);
   // The given string must be a valid integer representation. It may be
-  // prefixed by a minus and/or "0x".
+  // prefixed by a minus and/or "0x"/"0b".
   // Returns Bigint::null() if the string cannot be parsed.
   static RawBigint* NewFromCString(const char* str,
                                    Heap::Space space = Heap::kNew);
@@ -27,6 +27,12 @@ class BigintOperations : public AllStatic {
   // nul-terminated string of hex-digits.  It must only contain
   // hex-digits. Leading "0x" is not allowed.
   static intptr_t ComputeChunkLength(const char* hex_string);
+
+  // Compute chunk length of the bigint instance created for the
+  // specified binary string.  The specified binary string must be a
+  // nul-terminated string of binary digits.  It must only contain
+  // binary digits. Leading "0b" is not allowed.
+  static intptr_t ComputeBinaryChunkLength(const char* binary_string);
 
   // Create a bigint instance from the specified hex string. The given string
   // must be a nul-terminated string of hex-digits. It must only contain
@@ -39,6 +45,19 @@ class BigintOperations : public AllStatic {
   // of hex-digits. It must only contain hex-digits, leading "0x" is not
   // allowed.
   static void FromHexCString(const char* hex_string, const Bigint& value);
+
+  // Create a bigint instance from the specified binary string. The given string
+  // must be a nul-terminated string of binary digits. It must only contain
+  // binary digits. Leading "0b" is not allowed.
+  static RawBigint* FromBinaryCString(const char* binary_string,
+                                      Heap::Space space = Heap::kNew);
+
+  // Helper method to initialize a bigint instance object with the bigint value
+  // in the specified string. The given string must be a nul-terminated string
+  // of binary digits. It must only contain binary digits, leading "0b" is not
+  // allowed.
+  static void FromBinaryCString(const char* binary_string, const Bigint& value);
+
 
   // The given string must be a nul-terminated string of decimal digits. It
   // must only contain decimal digits (0-9). No sign is allowed. Leading

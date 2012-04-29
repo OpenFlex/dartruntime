@@ -113,6 +113,12 @@ RawBigint* BigintOperations::NewFromCString(const char* str,
     const Bigint& result = Bigint::Handle(FromHexCString(&str[2], space));
     ASSERT(IsClamped(result));
     return result.raw();
+  } else if ((str_length > 2) &&
+      (str[0] == '0') &&
+      ((str[1] == 'b') || (str[1] == 'B'))) {
+    const Bigint& result = Bigint::Handle(FromBinaryCString(&str[2], space));
+    ASSERT(IsClamped(result));
+    return result.raw();
   } else {
     return FromDecimalCString(str);
   }
@@ -146,6 +152,37 @@ RawBigint* BigintOperations::FromHexCString(const char* hex_string,
   intptr_t bigint_length = ComputeChunkLength(hex_string);
   const Bigint& result = Bigint::Handle(Bigint::Allocate(bigint_length, space));
   FromHexCString(hex_string, result);
+  return result.raw();
+}
+
+
+intptr_t BigintOperations::ComputeBinaryChunkLength(const char* binary_string) {
+  ASSERT(kDigitBitSize % 4 == 0);
+  intptr_t binary_length = strlen(binary_string);
+  // Round up.
+  intptr_t bigint_length = ((binary_length - 1) / kDigitBitSize) + 1;
+  return bigint_length;
+}
+
+
+RawBigint* BigintOperations::FromBinaryCString(const char* binary_string,
+                                               Heap::Space space) {
+  // If the string starts with '-' recursively restart the whole operation
+  // without the character and then toggle the sign.
+  // This allows multiple leading '-' (which will cancel each other out), but
+  // we have added an assert, to make sure that the returned result of the
+  // recursive call is not negative.
+  // We don't catch leading '-'s for zero. Ex: "--0", or "---".
+  if (binary_string[0] == '-') {
+    const Bigint& value = Bigint::Handle(FromBinaryCString(&binary_string[1], space));
+    value.ToggleSign();
+    ASSERT(value.IsZero() || value.IsNegative());
+    ASSERT(IsClamped(value));
+    return value.raw();
+  }
+  intptr_t bigint_length = ComputeBinaryChunkLength(binary_string);
+  const Bigint& result = Bigint::Handle(Bigint::Allocate(bigint_length, space));
+  FromBinaryCString(binary_string, result);
   return result.raw();
 }
 
@@ -1275,6 +1312,38 @@ void BigintOperations::FromHexCString(const char* hex_string,
     value.SetChunkAt(i, digit);
   }
   ASSERT(hex_i == -1);
+  Clamp(value);
+}
+
+
+void BigintOperations::FromBinaryCString(const char* binary_string,
+                                         const Bigint& value) {
+  ASSERT(binary_string[0] != '-');
+  intptr_t bigint_length = ComputeBinaryChunkLength(binary_string);
+  // The bigint's least significant digit (lsd) is at position 0, whereas the
+  // given string has it's lsd at the last position.
+  // The binary_i index, pointing into the string, starts therefore at the end,
+  // whereas the bigint-index (i) starts at 0.
+  intptr_t binary_length = strlen(binary_string);
+  intptr_t binary_i = binary_length - 1;
+  for (intptr_t i = 0; i < bigint_length; i++) {
+    Chunk digit = 0;
+    int shift = 0;
+    for (int j = 0; j < kDigitBitSize; j++) {
+      // Reads a block of binary digits and stores it in 'digit'.
+      // Ex: "10001101" with kDigitBitSize == 3, binary_i == 8, reads "101".
+      if (binary_i < 0) {
+        break;
+      }
+      ASSERT(binary_i >= 0);
+      char c = binary_string[binary_i--];
+      ASSERT(Utils::IsBinaryDigit(c));
+      digit += static_cast<Chunk>(Utils::BinaryDigitToInt(c)) << shift;
+      shift += 1;
+    }
+    value.SetChunkAt(i, digit);
+  }
+  ASSERT(binary_i == -1);
   Clamp(value);
 }
 

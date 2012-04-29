@@ -142,11 +142,20 @@ class Utils {
           || (('a' <= c) && (c <= 'f'));
   }
 
+  static bool IsBinaryDigit(char c) {
+    return '0' == c || '1' == c;
+  }
+
   static int HexDigitToInt(char c) {
     ASSERT(IsHexDigit(c));
     if (IsDecimalDigit(c)) return c - '0';
     if (('A' <= c) && (c <= 'F')) return 10 + (c - 'A');
     return 10 + (c - 'a');
+  }
+
+  static int BinaryDigitToInt(char c) {
+    ASSERT(IsBinaryDigit(c));
+    return c - '0';
   }
 
   static char IntToHexDigit(int i) {

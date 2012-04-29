@@ -141,6 +141,11 @@ bool Scanner::IsHexDigit(int32_t c) {
 }
 
 
+bool Scanner::IsBinaryDigit(int32_t c) {
+  return '0' == c || '1' == c;
+}
+
+
 bool Scanner::IsIdentStartChar(int32_t c) {
   return IsLetter(c) || (c == '_') || (c == '$');
 }
@@ -304,7 +309,7 @@ void Scanner::ScanIdentChars(bool allow_dollar) {
 
 // Parse integer or double number literal of format:
 // NUMBER = INTEGER | DOUBLE
-// INTEGER = D+ | (("0x" | "0X") H+)
+// INTEGER = D+ | (("0x" | "0X") H+) | (("0b" | "0B") B+)
 // DOUBLE = ((D+ ["." D*]) | ("." D+)) [ EXPONENT ]
 // EXPONENT = ("e" | "E") ["+" | "-"] D+
 void Scanner::ScanNumber(bool dec_point_seen) {
@@ -319,6 +324,15 @@ void Scanner::ScanNumber(bool dec_point_seen) {
       return;
     }
     while (IsHexDigit(c0_)) {
+      ReadChar();
+    }
+  } else if (!dec_point_seen && first_digit == '0' && (c0_ == 'b' || c0_ == 'B')) {
+    ReadChar();
+    if (!IsBinaryDigit(c0_)) {
+      ErrorMsg("binary digit expected");
+      return;
+    }
+    while (IsBinaryDigit(c0_)) {
       ReadChar();
     }
   } else {
