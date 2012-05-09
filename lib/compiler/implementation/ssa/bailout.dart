@@ -292,14 +292,14 @@ class SsaBailoutPropagator extends HBaseVisitor {
   final Compiler compiler;
   final List<HBasicBlock> blocks;
   final List<HLabeledBlockInformation> labeledBlockInformations;
-  SubGraph subGraph;  
+  SubGraph subGraph;
 
   SsaBailoutPropagator(Compiler this.compiler)
       : blocks = <HBasicBlock>[],
         labeledBlockInformations = <HLabeledBlockInformation>[];
 
   void visitGraph(HGraph graph) {
-    subGraph = new SubGraph(graph.entry, graph.exit);    
+    subGraph = new SubGraph(graph.entry, graph.exit);
     blocks.addLast(graph.entry);
     visitBasicBlock(graph.entry);
     blocks.removeLast();
@@ -316,8 +316,8 @@ class SsaBailoutPropagator extends HBaseVisitor {
     if (block.isLoopHeader()) {
       blocks.addLast(block);
     } else if (block.isLabeledBlock() && blocks.last() !== block) {
-      HLabeledBlockInformation info = block.blockInformation;
-      visitSubGraph(info.body);
+      HLabeledBlockInformation info = block.blockFlow.body;
+      visitStatements(info.body);
       return;
     }
 
@@ -326,6 +326,12 @@ class SsaBailoutPropagator extends HBaseVisitor {
       instruction.accept(this);
       instruction = instruction.next;
     }
+  }
+
+  void visitStatements(HStatementInformation info) {
+    assert(info is HSubGraphBlockInformation);
+    HSubGraphBlockInformation graph = info;
+    visitSubGraph(graph.subGraph);
   }
 
   void visitSubGraph(SubGraph graph) {
@@ -338,29 +344,30 @@ class SsaBailoutPropagator extends HBaseVisitor {
     subGraph = oldSubGraph;
 
     if (start.isLabeledBlock()) {
-      HLabeledBlockInformation info = start.blockInformation;
-      if (info.joinBlock !== null) {
-        visitBasicBlock(info.joinBlock);
+      HBasicBlock continuation = start.blockFlow.continuation;
+      if (continuation !== null) {
+        visitBasicBlock(continuation);
       }
     }
   }
 
   void visitIf(HIf instruction) {
     int preVisitedBlocks = 0;
-    HIfBlockInformation info = instruction.blockInformation;
-    visitSubGraph(info.thenGraph);
+    HIfBlockInformation info = instruction.blockInformation.body;
+    visitStatements(info.thenGraph);
     preVisitedBlocks++;
     if (instruction.hasElse) {
-      visitSubGraph(info.elseGraph);
+      visitStatements(info.elseGraph);
       preVisitedBlocks++;
     }
 
-    if (info.joinBlock !== null
-        && info.joinBlock.dominator !== instruction.block) {
+    HBasicBlock joinBlock = instruction.joinBlock;
+    if (joinBlock !== null
+        && joinBlock.dominator !== instruction.block) {
       // The join block is dominated by a block in one of the branches.
       // The subgraph traversal never reached it, so we visit it here
       // instead.
-      visitBasicBlock(info.joinBlock);
+      visitBasicBlock(joinBlock);
     }
 
     // Visit all the dominated blocks that are not part of the then or else

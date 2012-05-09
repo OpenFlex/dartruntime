@@ -4,6 +4,7 @@
 
 #include "vm/raw_object.h"
 
+#include "vm/class_table.h"
 #include "vm/freelist.h"
 #include "vm/isolate.h"
 #include "vm/object.h"
@@ -12,7 +13,9 @@
 
 namespace dart {
 
-void RawObject::Validate() const {
+void RawObject::Validate(Isolate* isolate) const {
+  // Validation only happens in DEBUG builds.
+#if defined(DEBUG)
   if (Object::null_class_ == reinterpret_cast<RawClass*>(kHeapObjectTag)) {
     // Validation relies on properly initialized class classes. Skip if the
     // VM is still being initialized.
@@ -30,8 +33,12 @@ void RawObject::Validate() const {
   ASSERT(raw_class_class->ptr()->instance_kind_ == kClass);
 
   // Validate that the tags_ field is sensible.
-  intptr_t tags = ptr()->tags_;
-  ASSERT((tags & 0xffff00f0) == 0);
+  uword tags = ptr()->tags_;
+  ASSERT((tags & 0x000000f0) == 0);
+  intptr_t cid = ClassTag::decode(tags);
+  RawClass* tag_class = isolate->class_table()->At(cid);
+  ASSERT(tag_class == raw_class);
+#endif
 }
 
 
@@ -116,11 +123,74 @@ intptr_t RawObject::SizeFromClass() const {
         instance_size = Array::InstanceSize(array_length);
         break;
       }
-      case kInternalByteArray: {
-        const RawInternalByteArray* raw_byte_array =
-            reinterpret_cast<const RawInternalByteArray*>(this);
+      case kInt8Array: {
+        const RawInt8Array* raw_byte_array =
+            reinterpret_cast<const RawInt8Array*>(this);
         intptr_t byte_array_length = Smi::Value(raw_byte_array->ptr()->length_);
-        instance_size = InternalByteArray::InstanceSize(byte_array_length);
+        instance_size = Int8Array::InstanceSize(byte_array_length);
+        break;
+      }
+      case kUint8Array: {
+        const RawUint8Array* raw_byte_array =
+            reinterpret_cast<const RawUint8Array*>(this);
+        intptr_t byte_array_length = Smi::Value(raw_byte_array->ptr()->length_);
+        instance_size = Uint8Array::InstanceSize(byte_array_length);
+        break;
+      }
+      case kInt16Array: {
+        const RawInt16Array* raw_byte_array =
+            reinterpret_cast<const RawInt16Array*>(this);
+        intptr_t byte_array_length = Smi::Value(raw_byte_array->ptr()->length_);
+        instance_size = Int16Array::InstanceSize(byte_array_length);
+        break;
+      }
+      case kUint16Array: {
+        const RawUint16Array* raw_byte_array =
+            reinterpret_cast<const RawUint16Array*>(this);
+        intptr_t byte_array_length = Smi::Value(raw_byte_array->ptr()->length_);
+        instance_size = Uint16Array::InstanceSize(byte_array_length);
+        break;
+      }
+      case kInt32Array: {
+        const RawInt32Array* raw_byte_array =
+            reinterpret_cast<const RawInt32Array*>(this);
+        intptr_t byte_array_length = Smi::Value(raw_byte_array->ptr()->length_);
+        instance_size = Int32Array::InstanceSize(byte_array_length);
+        break;
+      }
+      case kUint32Array: {
+        const RawUint32Array* raw_byte_array =
+            reinterpret_cast<const RawUint32Array*>(this);
+        intptr_t byte_array_length = Smi::Value(raw_byte_array->ptr()->length_);
+        instance_size = Uint32Array::InstanceSize(byte_array_length);
+        break;
+      }
+      case kInt64Array: {
+        const RawInt64Array* raw_byte_array =
+            reinterpret_cast<const RawInt64Array*>(this);
+        intptr_t byte_array_length = Smi::Value(raw_byte_array->ptr()->length_);
+        instance_size = Int64Array::InstanceSize(byte_array_length);
+        break;
+      }
+      case kUint64Array: {
+        const RawUint64Array* raw_byte_array =
+            reinterpret_cast<const RawUint64Array*>(this);
+        intptr_t byte_array_length = Smi::Value(raw_byte_array->ptr()->length_);
+        instance_size = Uint64Array::InstanceSize(byte_array_length);
+        break;
+      }
+      case kFloat32Array: {
+        const RawFloat32Array* raw_byte_array =
+            reinterpret_cast<const RawFloat32Array*>(this);
+        intptr_t byte_array_length = Smi::Value(raw_byte_array->ptr()->length_);
+        instance_size = Float32Array::InstanceSize(byte_array_length);
+        break;
+      }
+      case kFloat64Array: {
+        const RawFloat64Array* raw_byte_array =
+            reinterpret_cast<const RawFloat64Array*>(this);
+        intptr_t byte_array_length = Smi::Value(raw_byte_array->ptr()->length_);
+        instance_size = Float64Array::InstanceSize(byte_array_length);
         break;
       }
       case kTypeArguments: {
@@ -177,7 +247,7 @@ intptr_t RawObject::SizeFromClass() const {
     }
   }
   ASSERT(instance_size != 0);
-  intptr_t tags = ptr()->tags_;
+  uword tags = ptr()->tags_;
   ASSERT((instance_size == SizeTag::decode(tags)) ||
          (SizeTag::decode(tags) == 0) ||
          FreeBit::decode(tags));
@@ -267,13 +337,6 @@ intptr_t RawTypeParameter::VisitTypeParameterPointers(
     RawTypeParameter* raw_obj, ObjectPointerVisitor* visitor) {
   visitor->VisitPointer(reinterpret_cast<RawObject**>(&raw_obj->ptr()->name_));
   return TypeParameter::InstanceSize();
-}
-
-
-intptr_t RawInstantiatedType::VisitInstantiatedTypePointers(
-    RawInstantiatedType* raw_obj, ObjectPointerVisitor* visitor) {
-  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
-  return InstantiatedType::InstanceSize();
 }
 
 
@@ -447,9 +510,17 @@ intptr_t RawContextScope::VisitContextScopePointers(
 intptr_t RawICData::VisitICDataPointers(RawICData* raw_obj,
                                         ObjectPointerVisitor* visitor) {
   // Make sure that we got here with the tagged pointer as this.
-  ASSERT(raw_obj->IsHeapObject());
   visitor->VisitPointers(raw_obj->from(), raw_obj->to());
   return ICData::InstanceSize();
+}
+
+
+intptr_t RawSubtypeTestCache::VisitSubtypeTestCachePointers(
+    RawSubtypeTestCache* raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  RawSubtypeTestCache* obj = raw_obj->ptr();
+  visitor->VisitPointer(reinterpret_cast<RawObject**>(&obj->cache_));
+  return SubtypeTestCache::InstanceSize();
 }
 
 
@@ -653,22 +724,193 @@ intptr_t RawByteArray::VisitByteArrayPointers(RawByteArray* raw_obj,
 }
 
 
-intptr_t RawInternalByteArray::VisitInternalByteArrayPointers(
-    RawInternalByteArray* raw_obj, ObjectPointerVisitor* visitor) {
+intptr_t RawInt8Array::VisitInt8ArrayPointers(
+    RawInt8Array *raw_obj, ObjectPointerVisitor* visitor) {
   // Make sure that we got here with the tagged pointer as this.
   ASSERT(raw_obj->IsHeapObject());
   intptr_t length = Smi::Value(raw_obj->ptr()->length_);
   visitor->VisitPointers(raw_obj->from(), raw_obj->to());
-  return InternalByteArray::InstanceSize(length);
+  return Int8Array::InstanceSize(length);
 }
 
 
-intptr_t RawExternalByteArray::VisitExternalByteArrayPointers(
-    RawExternalByteArray* raw_obj, ObjectPointerVisitor* visitor) {
+intptr_t RawUint8Array::VisitUint8ArrayPointers(
+    RawUint8Array *raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  intptr_t length = Smi::Value(raw_obj->ptr()->length_);
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return Uint8Array::InstanceSize(length);
+}
+
+
+intptr_t RawInt16Array::VisitInt16ArrayPointers(
+    RawInt16Array *raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  intptr_t length = Smi::Value(raw_obj->ptr()->length_);
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return Int16Array::InstanceSize(length);
+}
+
+
+intptr_t RawUint16Array::VisitUint16ArrayPointers(
+    RawUint16Array *raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  intptr_t length = Smi::Value(raw_obj->ptr()->length_);
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return Uint16Array::InstanceSize(length);
+}
+
+
+intptr_t RawInt32Array::VisitInt32ArrayPointers(
+    RawInt32Array *raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  intptr_t length = Smi::Value(raw_obj->ptr()->length_);
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return Int32Array::InstanceSize(length);
+}
+
+
+intptr_t RawUint32Array::VisitUint32ArrayPointers(
+    RawUint32Array *raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  intptr_t length = Smi::Value(raw_obj->ptr()->length_);
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return Uint32Array::InstanceSize(length);
+}
+
+
+intptr_t RawInt64Array::VisitInt64ArrayPointers(
+    RawInt64Array *raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  intptr_t length = Smi::Value(raw_obj->ptr()->length_);
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return Int64Array::InstanceSize(length);
+}
+
+
+intptr_t RawUint64Array::VisitUint64ArrayPointers(
+    RawUint64Array *raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  intptr_t length = Smi::Value(raw_obj->ptr()->length_);
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return Uint64Array::InstanceSize(length);
+}
+
+
+intptr_t RawFloat32Array::VisitFloat32ArrayPointers(
+    RawFloat32Array *raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  intptr_t length = Smi::Value(raw_obj->ptr()->length_);
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return Float32Array::InstanceSize(length);
+}
+
+
+intptr_t RawFloat64Array::VisitFloat64ArrayPointers(
+    RawFloat64Array *raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  intptr_t length = Smi::Value(raw_obj->ptr()->length_);
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return Float64Array::InstanceSize(length);
+}
+
+
+intptr_t RawExternalInt8Array::VisitExternalInt8ArrayPointers(
+    RawExternalInt8Array* raw_obj, ObjectPointerVisitor* visitor) {
   // Make sure that we got here with the tagged pointer as this.
   ASSERT(raw_obj->IsHeapObject());
   visitor->VisitPointers(raw_obj->from(), raw_obj->to());
-  return ExternalByteArray::InstanceSize();
+  return ExternalInt8Array::InstanceSize();
+}
+
+
+intptr_t RawExternalUint8Array::VisitExternalUint8ArrayPointers(
+    RawExternalUint8Array* raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return ExternalUint8Array::InstanceSize();
+}
+
+
+intptr_t RawExternalInt16Array::VisitExternalInt16ArrayPointers(
+    RawExternalInt16Array* raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return ExternalInt16Array::InstanceSize();
+}
+
+
+intptr_t RawExternalUint16Array::VisitExternalUint16ArrayPointers(
+    RawExternalUint16Array* raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return ExternalUint16Array::InstanceSize();
+}
+
+
+intptr_t RawExternalInt32Array::VisitExternalInt32ArrayPointers(
+    RawExternalInt32Array* raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return ExternalInt32Array::InstanceSize();
+}
+
+
+intptr_t RawExternalUint32Array::VisitExternalUint32ArrayPointers(
+    RawExternalUint32Array* raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return ExternalUint32Array::InstanceSize();
+}
+
+
+intptr_t RawExternalInt64Array::VisitExternalInt64ArrayPointers(
+    RawExternalInt64Array* raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return ExternalInt64Array::InstanceSize();
+}
+
+
+intptr_t RawExternalUint64Array::VisitExternalUint64ArrayPointers(
+    RawExternalUint64Array* raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return ExternalUint64Array::InstanceSize();
+}
+
+
+intptr_t RawExternalFloat32Array::VisitExternalFloat32ArrayPointers(
+    RawExternalFloat32Array* raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return ExternalFloat32Array::InstanceSize();
+}
+
+
+intptr_t RawExternalFloat64Array::VisitExternalFloat64ArrayPointers(
+    RawExternalFloat64Array* raw_obj, ObjectPointerVisitor* visitor) {
+  // Make sure that we got here with the tagged pointer as this.
+  ASSERT(raw_obj->IsHeapObject());
+  visitor->VisitPointers(raw_obj->from(), raw_obj->to());
+  return ExternalFloat64Array::InstanceSize();
 }
 
 

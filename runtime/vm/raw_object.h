@@ -21,7 +21,6 @@ namespace dart {
   V(AbstractType)                                                              \
     V(Type)                                                                    \
     V(TypeParameter)                                                           \
-    V(InstantiatedType)                                                        \
   V(AbstractTypeArguments)                                                     \
     V(TypeArguments)                                                           \
     V(InstantiatedTypeArguments)                                               \
@@ -41,6 +40,7 @@ namespace dart {
   V(Context)                                                                   \
   V(ContextScope)                                                              \
   V(ICData)                                                                    \
+  V(SubtypeTestCache)                                                          \
   V(Error)                                                                     \
     V(ApiError)                                                                \
     V(LanguageError)                                                           \
@@ -65,8 +65,26 @@ namespace dart {
       V(ImmutableArray)                                                        \
     V(GrowableObjectArray)                                                     \
     V(ByteArray)                                                               \
-      V(InternalByteArray)                                                     \
-      V(ExternalByteArray)                                                     \
+      V(Int8Array)                                                             \
+      V(Uint8Array)                                                            \
+      V(Int16Array)                                                            \
+      V(Uint16Array)                                                           \
+      V(Int32Array)                                                            \
+      V(Uint32Array)                                                           \
+      V(Int64Array)                                                            \
+      V(Uint64Array)                                                           \
+      V(Float32Array)                                                          \
+      V(Float64Array)                                                          \
+      V(ExternalInt8Array)                                                     \
+      V(ExternalUint8Array)                                                    \
+      V(ExternalInt16Array)                                                    \
+      V(ExternalUint16Array)                                                   \
+      V(ExternalInt32Array)                                                    \
+      V(ExternalUint32Array)                                                   \
+      V(ExternalInt64Array)                                                    \
+      V(ExternalUint64Array)                                                   \
+      V(ExternalFloat32Array)                                                  \
+      V(ExternalFloat64Array)                                                  \
     V(Closure)                                                                 \
     V(Stacktrace)                                                              \
     V(JSRegExp)                                                                \
@@ -85,6 +103,7 @@ CLASS_LIST(DEFINE_FORWARD_DECLARATION)
 
 
 enum ObjectKind {
+  kIllegalObjectKind = 0,
 #define DEFINE_OBJECT_KIND(clazz)                                              \
   k##clazz,
 CLASS_LIST(DEFINE_OBJECT_KIND)
@@ -92,7 +111,13 @@ CLASS_LIST(DEFINE_OBJECT_KIND)
   // The following entry does not describe a real object, but instead it
   // identifies free list elements in the heap.
   kFreeListElement,
-  kNumOfObjectKinds = kFreeListElement
+  // The following entries do not describe a real object, but instead are used
+  // to allocate class indexes for pre-allocated instance classes such as the
+  // Null, Void, Dynamic and other similar classes.
+  kNullClassIndex,
+  kDynamicClassIndex,
+  kVoidClassIndex,
+  kNumPredefinedKinds = 100
 };
 
 enum ObjectAlignment {
@@ -160,6 +185,8 @@ class RawObject {
     kReservedBit10M = 7,
     kSizeTagBit = 8,
     kSizeTagSize = 8,
+    kClassTagBit = kSizeTagBit + kSizeTagSize,
+    kClassTagSize = 16
   };
 
   // Encodes the object size in the tag in units of object alignment.
@@ -192,6 +219,8 @@ class RawObject {
       return value << kObjectAlignmentLog2;
     }
   };
+
+  class ClassTag : public BitField<intptr_t, kClassTagBit, kClassTagSize> {};
 
   bool IsHeapObject() const {
     uword value = reinterpret_cast<uword>(this);
@@ -250,7 +279,7 @@ class RawObject {
     return result;
   }
 
-  void Validate() const;
+  void Validate(Isolate* isolate) const;
   intptr_t VisitPointers(ObjectPointerVisitor* visitor);
   bool FindObject(FindObjectVisitor* visitor);
 
@@ -341,6 +370,7 @@ class RawClass : public RawObject {
   cpp_vtable handle_vtable_;
   intptr_t instance_size_;
   ObjectKind instance_kind_;
+  intptr_t index_;  // Index in the class table.
   intptr_t type_arguments_instance_field_offset_;  // May be kNoTypeArguments.
   intptr_t next_field_offset_;  // Offset of then next instance field.
   intptr_t num_native_fields_;  // Number of native fields in class.
@@ -825,6 +855,13 @@ class RawICData : public RawObject {
 };
 
 
+class RawSubtypeTestCache : public RawObject {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(SubtypeTestCache);
+  RawArray* cache_;
+};
+
+
+
 class RawError : public RawObject {
   RAW_HEAP_OBJECT_IMPLEMENTATION(Error);
 };
@@ -1093,20 +1130,90 @@ class RawByteArray : public RawInstance {
 };
 
 
-class RawInternalByteArray : public RawByteArray {
-  RAW_HEAP_OBJECT_IMPLEMENTATION(InternalByteArray);
+class RawInt8Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(Int8Array);
 
   // Variable length data follows here.
-  uint8_t* data() {
-    uword address_of_length = reinterpret_cast<uword>(&length_);
-    return reinterpret_cast<uint8_t*>(address_of_length + kWordSize);
-  }
+  int8_t data_[0];
 };
 
 
+class RawUint8Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(Uint8Array);
+
+  // Variable length data follows here.
+  uint8_t data_[0];
+};
+
+
+class RawInt16Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(Int16Array);
+
+  // Variable length data follows here.
+  int16_t data_[0];
+};
+
+
+class RawUint16Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(Uint16Array);
+
+  // Variable length data follows here.
+  uint16_t data_[0];
+};
+
+
+class RawInt32Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(Int32Array);
+
+  // Variable length data follows here.
+  int32_t data_[0];
+};
+
+
+class RawUint32Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(Uint32Array);
+
+  // Variable length data follows here.
+  uint32_t data_[0];
+};
+
+
+class RawInt64Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(Int64Array);
+
+  // Variable length data follows here.
+  int64_t data_[0];
+};
+
+
+class RawUint64Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(Uint64Array);
+
+  // Variable length data follows here.
+  uint64_t data_[0];
+};
+
+
+class RawFloat32Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(Float32Array);
+
+  // Variable length data follows here.
+  float data_[0];
+};
+
+
+class RawFloat64Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(Float64Array);
+
+  // Variable length data follows here.
+  double data_[0];
+};
+
+
+template<typename T>
 class ExternalByteArrayData {
  public:
-  ExternalByteArrayData(uint8_t* data,
+  ExternalByteArrayData(T* data,
                         void* peer,
                         Dart_PeerFinalizer callback) :
       data_(data), peer_(peer), callback_(callback) {
@@ -1115,7 +1222,7 @@ class ExternalByteArrayData {
     if (callback_ != NULL) (*callback_)(peer_);
   }
 
-  uint8_t* data() {
+  T* data() {
     return data_;
   }
   void* peer() {
@@ -1123,16 +1230,79 @@ class ExternalByteArrayData {
   }
 
  private:
-  uint8_t* data_;
+  T* data_;
   void* peer_;
   Dart_PeerFinalizer callback_;
 };
 
 
-class RawExternalByteArray : public RawByteArray {
-  RAW_HEAP_OBJECT_IMPLEMENTATION(ExternalByteArray);
+class RawExternalInt8Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(ExternalInt8Array);
 
-  ExternalByteArrayData* external_data_;
+  ExternalByteArrayData<int8_t>* external_data_;
+};
+
+
+class RawExternalUint8Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(ExternalUint8Array);
+
+  ExternalByteArrayData<uint8_t>* external_data_;
+};
+
+
+class RawExternalInt16Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(ExternalInt16Array);
+
+  ExternalByteArrayData<int16_t>* external_data_;
+};
+
+
+class RawExternalUint16Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(ExternalUint16Array);
+
+  ExternalByteArrayData<uint16_t>* external_data_;
+};
+
+
+class RawExternalInt32Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(ExternalInt32Array);
+
+  ExternalByteArrayData<int32_t>* external_data_;
+};
+
+
+class RawExternalUint32Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(ExternalUint32Array);
+
+  ExternalByteArrayData<uint32_t>* external_data_;
+};
+
+
+class RawExternalInt64Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(ExternalInt64Array);
+
+  ExternalByteArrayData<int64_t>* external_data_;
+};
+
+
+class RawExternalUint64Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(ExternalUint64Array);
+
+  ExternalByteArrayData<uint64_t>* external_data_;
+};
+
+
+class RawExternalFloat32Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(ExternalFloat32Array);
+
+  ExternalByteArrayData<float>* external_data_;
+};
+
+
+class RawExternalFloat64Array: public RawByteArray {
+  RAW_HEAP_OBJECT_IMPLEMENTATION(ExternalFloat64Array);
+
+  ExternalByteArrayData<double>* external_data_;
 };
 
 

@@ -105,14 +105,17 @@ void StubCode::GenerateBreakpointDynamicStub(Assembler* assembler) {
   __ Unimplemented("BreakpointDynamic stub");
 }
 
-void StubCode::GenerateIsRawSubTypeStub(Assembler* assembler) {
-  __ Unimplemented("IsRawSubType Stub");
+void StubCode::GenerateSubtype1TestCacheStub(Assembler* assembler) {
+  __ Unimplemented("Subtype1TestCache Stub");
 }
 
-void StubCode::GenerateSubtypeTestCacheStub(Assembler* assembler) {
-  __ Unimplemented("SubtypeTestCache Stub");
+void StubCode::GenerateSubtype2TestCacheStub(Assembler* assembler) {
+  __ Unimplemented("Subtype2TestCache Stub");
 }
 
+void StubCode::GenerateSubtype3TestCacheStub(Assembler* assembler) {
+  __ Unimplemented("Subtype3TestCache Stub");
+}
 
 }  // namespace dart
 

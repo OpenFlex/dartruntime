@@ -27,6 +27,7 @@ DECLARE_RUNTIME_ENTRY(AllocateImplicitInstanceClosure);
 DECLARE_RUNTIME_ENTRY(AllocateImplicitStaticClosure);
 DECLARE_RUNTIME_ENTRY(AllocateContext);
 DECLARE_RUNTIME_ENTRY(AllocateObject);
+DECLARE_RUNTIME_ENTRY(AllocateObjectWithBoundsCheck);
 DECLARE_RUNTIME_ENTRY(BreakpointStaticHandler);
 DECLARE_RUNTIME_ENTRY(BreakpointReturnHandler);
 DECLARE_RUNTIME_ENTRY(BreakpointDynamicHandler);
@@ -121,19 +122,6 @@ class FunctionsCache : public ValueObject {
                               int num_named_arguments);
 
   const Class& class_;
-};
-
-
-// A subtype test cache is an array remembering subtype tests for given values.
-class SubTypeTestCache : public AllStatic {
- public:
-  enum Entries {
-    kInstanceClass = 0,
-    kInstanceTypeArguments = 1,
-    kInstantiatorTypeArguments = 2,
-    kTestResult = 3,
-    kNumEntries  = 4,
-  };
 };
 
 

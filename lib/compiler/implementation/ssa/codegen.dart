@@ -7,6 +7,30 @@ class SsaCodeGeneratorTask extends CompilerTask {
   String get name() => 'SSA code generator';
 
 
+  String buildJavaScriptFunction(FunctionElement element,
+                                 String parameters,
+                                 String body) {
+    String extraSpace = "";
+    // Members are emitted inside a JavaScript object literal. To line up the
+    // indentation we want the closing curly brace to be indented by one space.
+    // Example:
+    // defineClass("A", "B", ... , {
+    //  foo$1: function(..) {
+    //  },  /* <========== indent by 1. */
+    //  bar$2: function(..) {
+    //  },  /* <========== indent by 1. */
+    //
+    // For static functions this is not necessary:
+    // $.staticFun = function() {
+    //   ...
+    // };
+    if (element.isInstanceMember() ||
+        element.kind == ElementKind.GENERATIVE_CONSTRUCTOR_BODY) {
+      extraSpace = " ";
+    }
+    return 'function($parameters) {\n$body$extraSpace}';
+  }
+
   String generateMethod(WorkItem work, HGraph graph) {
     return measure(() {
       compiler.tracer.traceGraph("codegen", graph);
@@ -35,7 +59,7 @@ class SsaCodeGeneratorTask extends CompilerTask {
       } else {
         code = codegen.buffer.toString();
       }
-      return 'function($parameters) {\n$code}';
+      return buildJavaScriptFunction(element, parameters, code);
     });
   }
 
@@ -58,7 +82,9 @@ class SsaCodeGeneratorTask extends CompilerTask {
         newParameters.add(', env$i');
       }
 
-      return 'function($newParameters) {\n${codegen.setup}${codegen.buffer}}';
+      Element element = work.element;
+      String body = '${codegen.setup}${codegen.buffer}';
+      return buildJavaScriptFunction(element, newParameters.toString(), body);
     });
   }
 
@@ -69,7 +95,7 @@ class SsaCodeGeneratorTask extends CompilerTask {
     // The dom/html libraries have inline JS code that reference
     // parameter names directly. Long-term such code will be rejected.
     // Now, just don't mangle the parameter name.
-    function.computeParameters(compiler).forEachParameter((Element element) {
+    function.computeSignature(compiler).forEachParameter((Element element) {
       parameterNames[element] = function.isNative()
           ? element.name.slowToString()
           : JsNames.getValid('${element.name.slowToString()}');
@@ -130,6 +156,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
   Element boolifiedEqualsNullElement;
   int indent = 0;
   int expectedPrecedence = JSPrecedence.STATEMENT_PRECEDENCE;
+  JSBinaryOperatorPrecedence unsignedShiftPrecedences;
   HGraph currentGraph;
   /**
    * Whether the code-generation should try to generate an expression
@@ -168,7 +195,8 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
       logicalOperations = new Map<HPhi, String>(),
       breakAction = new Map<Element, ElementAction>(),
       continueAction = new Map<Element, ElementAction>(),
-      phiEquivalence = new Equivalence<HPhi>() {
+      phiEquivalence = new Equivalence<HPhi>(),
+      unsignedShiftPrecedences = JSPrecedence.binary['>>>'] {
 
     for (final name in parameterNames.getValues()) {
       prefixes[name] = 0;
@@ -230,8 +258,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     beginGraph(graph);
     visitBasicBlock(graph.entry);
     if (!delayedVarDecl.isEmpty()) {
-      addIndentation();
-      buffer.add("var ");
+      addIndented("var ");
       while (true) {
         buffer.add(delayedVarDecl.head);
         delayedVarDecl = delayedVarDecl.tail;
@@ -259,7 +286,15 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
    * and not, e.g., expressions where the value isn't assigned, or where it's
    * assigned to something that's not a simple variable.
    */
-  int expressionType(SubGraph limits) {
+  int expressionType(HExpressionInformation info) {
+    // The only HExpressionInformation used as part of a HBlockInformation is
+    // current HSubExpressionBlockInformation, so it's the only one reaching
+    // here. If we start using the other HExpressionInformation types too,
+    // this code should be generalized.
+    assert(info is HSubExpressionBlockInformation);
+    HSubExpressionBlockInformation expressionInfo = info;
+    SubGraph limits = expressionInfo.subExpression;
+
     // Start assuming that we can generate declarations. If we find a
     // counter-example, we degrade our assumption to either expression or
     // statement, and in the latter case, we can return immediately since
@@ -305,34 +340,66 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     return result;
   }
 
-  bool isJSExpression(SubGraph limits) {
-    return expressionType(limits) != TYPE_STATEMENT;
+  bool isJSExpression(HExpressionInformation info) {
+    return expressionType(info) !== TYPE_STATEMENT;
   }
 
-  bool isJSDeclaration(SubGraph limits) {
-    return expressionType(limits) == TYPE_DECLARATION;
+  bool isJSDeclaration(HExpressionInformation info) {
+    return expressionType(info) === TYPE_DECLARATION;
   }
 
-  bool isJSCondition(SubGraph limits) {
-    return isJSExpression(limits) && (limits.end.last is HConditionalBranch);
+  bool isJSCondition(HExpressionInformation info) {
+    HSubExpressionBlockInformation graph = info;
+    SubExpression limits = graph.subExpression;
+    return expressionType(info) !== TYPE_STATEMENT &&
+       (limits.end.last is HConditionalBranch);
   }
 
-  void visitExpressionGraph(SubGraph expressionSubGraph) {
+  /**
+   * Generate statements from block information.
+   * If the block information contains expressions, generate only
+   * assignments, and if it ends in a conditional branch, don't generate
+   * the condition.
+   */
+  void generateStatements(HBlockInformation block) {
+    int oldState = generationState;
+    generationState = STATE_STATEMENT;
+    if (block is HStatementInformation) {
+      block.accept(this);
+    } else {
+      HSubExpressionBlockInformation expression = block;
+      visitSubGraph(expression.subExpression);
+    }
+    generationState = oldState;
+  }
+
+  /**
+   * Generate expressions from block information.
+   */
+  void generateExpression(HExpressionInformation expression) {
+    // Currently we only handle sub-expression graphs.
+    assert(expression is HSubExpressionBlockInformation);
+    HSubExpressionBlockInformation expressionSubGraph = expression;
+
     int oldState = generationState;
     generationState = STATE_FIRST_EXPRESSION;
-    visitSubGraph(expressionSubGraph);
+    visitSubGraph(expressionSubGraph.subExpression);
     generationState = oldState;
   }
 
-  void visitDeclarationGraph(SubGraph expressionSubGraph) {
+  void generateDeclaration(HExpressionInformation expression) {
+    // Currently we only handle sub-expression graphs.
+    assert(expression is HSubExpressionBlockInformation);
+    HSubExpressionBlockInformation expressionSubGraph = expression;
+
     int oldState = generationState;
     generationState = STATE_FIRST_DECLARATION;
-    visitSubGraph(expressionSubGraph);
+    visitSubGraph(expressionSubGraph.subExpression);
     generationState = oldState;
   }
 
-  void visitConditionGraph(SubGraph conditionSubGraph) {
-    visitExpressionGraph(conditionSubGraph);
+  void generateCondition(HBlockInformation condition) {
+    generateExpression(condition);
   }
 
   String temporary(HInstruction instruction) {
@@ -368,6 +435,18 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
       name = '${prefix}${prefixes[prefix]++}';
     }
     return newName(id, name);
+  }
+
+  // TODO(floitsch): share more code with [temporary].
+  String freshTemporary() {
+    String prefix = TEMPORARY_PREFIX;
+    String name = '${prefix}${prefixes[prefix]++}';
+    while (usedNames.contains(name)) {
+      name = '${prefix}${prefixes[prefix]++}';
+    }
+    String result = JsNames.getValid(name);
+    usedNames.add(result);
+    return result;
   }
 
   bool temporaryExists(HInstruction instruction) {
@@ -437,25 +516,107 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     }
   }
 
+  bool needsNewVariable(HInstruction instruction) {
+    bool needsVar = !instruction.usedBy.isEmpty();
+    if (needsVar && instruction is HCheck) {
+      HCheck check = instruction;
+      HInstruction input = check.checkedInput;
+      // We only need a new var if [input] is generated at use site
+      // but is not a trivial code motion invariant instruction like
+      // for parameters or this.
+      //
+      // For example:
+      // Foo a = this;
+      // print(a);
+      // print(a);
+      //
+      // In checked mode no new variable is needed.
+      // FooTypeCheck(this);
+      // print(this);
+      // print(this);
+      //
+      // But for this example:
+      // Foo a = foo();
+      // print(a);
+      // print(a);
+      //
+      // We need a new variable:
+      // var a = FooTypeCheck(foo());
+      // print(a);
+      // print(a);
+      needsVar = isGenerateAtUseSite(input) && !input.isCodeMotionInvariant();
+    }
+    return needsVar;
+  }
+
   void define(HInstruction instruction) {
-    String name = temporary(instruction);
-    declareVariable(name);
-    buffer.add(" = ");
-    visit(instruction, JSPrecedence.ASSIGNMENT_PRECEDENCE);
+    if (needsNewVariable(instruction)) {
+      String name = temporary(instruction);
+      declareVariable(name);
+      buffer.add(" = ");
+      visit(instruction, JSPrecedence.ASSIGNMENT_PRECEDENCE);
+    } else {
+      visit(instruction, JSPrecedence.STATEMENT_PRECEDENCE);
+    }
   }
 
   void use(HInstruction argument, int expectedPrecedenceForArgument) {
-    if (isGenerateAtUseSite(argument)) {
+    if (argument is HCheck) {
+      HCheck instruction  = argument;
+      HInstruction input = instruction.checkedInput;
+      if (isGenerateAtUseSite(argument) && isGenerateAtUseSite(input)) {
+        // If both instructions can be generated at use site, we can
+        // just visit [argument].
+        //
+        // For example:
+        // Foo a = foo();
+        // print(a);
+        //
+        // In checked mode will turn into:
+        // print(FooTypeCheck(foo()));
+        visit(argument, expectedPrecedenceForArgument);
+      } else if (isGenerateAtUseSite(input)) {
+        // If [argument] cannot be generated at use site, but [input]
+        // can, use the temporary of [argument]. A code motion
+        // invariant instruction does not have a temporary, so we just
+        //
+        // For example:
+        // Foo a = foo();
+        // print(a);
+        // print(a);
+        //
+        // In checked mode will turn into:
+        // var a = FooTypeCheck(foo());
+        // print(a);
+        // print(a);
+        //
+        // Note that in case the input is code motion invariant, like
+        // for parameters or this, we just need to visit it, since
+        // there is no temporary for such instruction.
+        if (input.isCodeMotionInvariant()) {
+          visit(input, expectedPrecedenceForArgument);
+        } else {
+          buffer.add(temporary(argument));
+        }
+      } else {
+        // Otherwise we just use [input]. [argument] has already been
+        // emitted, and we just need the temporary of [input].
+        //
+        // For example:
+        // var a = foo();
+        // print(a);
+        // Foo b = a;
+        // print(b);
+        //
+        // In checked mode will turn into:
+        // var a = foo();
+        // print(a);
+        // FooTypeCheck(a);
+        // print(a);
+        use(input, expectedPrecedenceForArgument);
+      }
+    } else if (isGenerateAtUseSite(argument)) {
       visit(argument, expectedPrecedenceForArgument);
-    } else if (argument is HIntegerCheck) {
-      HIntegerCheck instruction = argument;
-      use(instruction.value, expectedPrecedenceForArgument);
-    } else if (argument is HBoundsCheck) {
-      HBoundsCheck instruction = argument;
-      use(instruction.index, expectedPrecedenceForArgument);
-    } else if (argument is HTypeGuard) {
-      HTypeGuard instruction = argument;
-      use(instruction.guarded, expectedPrecedenceForArgument);
     } else {
       buffer.add(temporary(argument));
     }
@@ -469,27 +630,66 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
   }
 
   void continueAsBreak(LabelElement target) {
-    addIndentation();
-    buffer.add("break ");
+    addIndented("break ");
     writeContinueLabel(target);
     buffer.add(";\n");
   }
 
   void implicitContinueAsBreak(TargetElement target) {
-    addIndentation();
-    buffer.add("break ");
+    addIndented("break ");
     writeImplicitContinueLabel(target);
     buffer.add(";\n");
   }
 
   void implicitBreakWithLabel(TargetElement target) {
-    addIndentation();
-    buffer.add("break ");
+    addIndented("break ");
     writeImplicitLabel(target);
     buffer.add(";\n");
   }
 
   bool visitIfInfo(HIfBlockInformation info) {
+    HInstruction condition = info.condition.conditionExpression;
+    if (condition.isConstant()) {
+      // If the condition is constant, only generate one branch (if any).
+      HConstant constantCondition = condition;
+      Constant constant = constantCondition.constant;
+      generateStatements(info.condition);
+      if (constant.isTrue()) {
+        generateStatements(info.thenGraph);
+      } else if (info.elseGraph !== null) {
+        generateStatements(info.elseGraph);
+      }
+    } else {
+      generateStatements(info.condition);
+      addIndented("if (");
+      use(condition, JSPrecedence.EXPRESSION_PRECEDENCE);
+      buffer.add(") {\n");
+      indent++;
+      generateStatements(info.thenGraph);
+      indent--;
+      addIndented("}");
+      if (info.elseGraph !== null) {
+        buffer.add(" else {\n");
+        indent++;
+        generateStatements(info.elseGraph);
+        indent--;
+        addIndented("}");
+      }
+      buffer.add("\n");
+    }
+    return true;
+  }
+
+  bool visitSequenceInfo(HStatementSequenceInformation info) {
+    return false;
+  }
+
+  bool visitSubGraphInfo(HSubGraphBlockInformation info) {
+    visitSubGraph(info.subGraph);
+    return true;
+  }
+
+  bool visitSubExpressionInfo(HSubExpressionBlockInformation info) {
     return false;
   }
 
@@ -497,41 +697,61 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     return false;
   }
 
-  bool visitLoopInfo(HLoopInformation info) {
-    // We must look at the loop information only once, when visiting the
-    // initializer. After that, the initializer has been generated.
-    // The same block information is also put on the condition-block for
-    // the traditional code generation.
-    bool isInitializerBlock = (currentBlock !== info.header);
-    if (!isInitializerBlock && info.kind != HLoopInformation.DO_WHILE_LOOP) {
-      return false;
+  bool visitTryInfo(HTryBlockInformation info) {
+    addIndented("try {\n");
+    indent++;
+    generateStatements(info.body);
+    indent--;
+    addIndented("}");
+    if (info.catchBlock !== null) {
+      // Printing the catch part.
+      HParameterValue exception = info.catchVariable;
+      String name = temporary(exception);
+      parameterNames[exception.element] = name;
+      buffer.add('catch ($name) {\n');
+      indent++;
+      generateStatements(info.catchBlock);
+      parameterNames.remove(exception.element);
+      indent--;
+      addIndented('}');
     }
+    if (info.finallyBlock != null) {
+      buffer.add(" finally {\n");
+      indent++;
+      generateStatements(info.finallyBlock);
+      indent--;
+      addIndented("}");
+    }
+    buffer.add("\n");
+    return true;
+  }
 
-    SubExpression condition = info.condition;
+  bool visitLoopInfo(HLoopBlockInformation info) {
+    HExpressionInformation condition = info.condition;
     bool isConditionExpression = isJSCondition(condition);
 
     void visitBodyIgnoreLabels() {
       if (info.body.start.isLabeledBlock()) {
         HBlockInformation oldInfo = currentBlockInformation;
-        currentBlockInformation = info.body.start.blockInformation;
-        visitSubGraph(info.body);
+        currentBlockInformation = info.body.start.blockFlow.body;
+        generateStatements(info.body);
         currentBlockInformation = oldInfo;
       } else {
-        visitSubGraph(info.body);
+        generateStatements(info.body);
       }
     }
 
     switch (info.kind) {
       // Treate all three "test-first" loops the same way.
-      case HLoopInformation.FOR_LOOP:
-      case HLoopInformation.WHILE_LOOP:
-      case HLoopInformation.FOR_IN_LOOP: {
-        SubGraph initialization = info.initializer;
+      case HLoopBlockInformation.FOR_LOOP:
+      case HLoopBlockInformation.WHILE_LOOP:
+      case HLoopBlockInformation.FOR_IN_LOOP: {
+        HBlockInformation initialization = info.initializer;
         int initializationType = TYPE_STATEMENT;
         if (initialization !== null) {
           initializationType = expressionType(initialization);
           if (initializationType == TYPE_STATEMENT) {
-            visitSubGraph(initialization);
+            generateStatements(initialization);
             initialization = null;
           }
         }
@@ -545,19 +765,18 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
             info.updates !== null && isJSExpression(info.updates)) {
           // If we have an updates graph, and it's expressible as an
           // expression, generate a for-loop.
-          addIndentation();
-          buffer.add("for (");
+          addIndented("for (");
           if (initialization !== null) {
             if (initializationType != TYPE_DECLARATION) {
-              visitExpressionGraph(initialization);
+              generateExpression(initialization);
             } else {
-              visitDeclarationGraph(initialization);
+              generateDeclaration(initialization);
             }
           }
           buffer.add("; ");
-          visitConditionGraph(condition);
+          generateCondition(condition);
           buffer.add("; ");
-          visitExpressionGraph(info.updates);
+          generateExpression(info.updates);
           buffer.add(") {\n");
           indent++;
           // The body might be labeled. Ignore this when recursing on the
@@ -571,39 +790,36 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
           // We have either no update graph, or it's too complex to
           // put in an expression.
           if (initialization !== null) {
-            visitSubGraph(initialization);
+            generateStatements(initialization);
           }
-          addIndentation();
-          buffer.add("while (");
+          addIndented("while (");
           if (isConditionExpression) {
-            visitConditionGraph(condition);
+            generateCondition(condition);
             buffer.add(") {\n");
             indent++;
           } else {
             buffer.add("true) {\n");
             indent++;
-            visitSubGraph(condition);
-            addIndentation();
-            buffer.add("if (!");
-            use(condition.end.last.inputs[0], JSPrecedence.PREFIX_PRECEDENCE);
+            generateStatements(condition);
+            addIndented("if (!");
+            use(condition.conditionExpression, JSPrecedence.PREFIX_PRECEDENCE);
             buffer.add(") break;\n");
           }
           if (info.updates !== null) {
             wrapLoopBodyForContinue(info);
-            visitSubGraph(info.updates);
+            generateStatements(info.updates);
           } else {
             visitBodyIgnoreLabels();
           }
           indent--;
         }
-        addIndentation();
-        buffer.add("}\n");
+        addIndented("}\n");
         break;
       }
-      case HLoopInformation.DO_WHILE_LOOP: {
+      case HLoopBlockInformation.DO_WHILE_LOOP: {
         // Generate do-while loop in all cases.
         if (info.initializer !== null) {
-          visitSubGraph(info.initializer);
+          generateStatements(info.initializer);
         }
         addIndentation();
         for (LabelElement label in info.labels) {
@@ -620,20 +836,18 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
           visitBodyIgnoreLabels();
         }
         if (info.updates !== null) {
-          visitSubGraph(info.updates);
+          generateStatements(info.updates);
         }
         if (isConditionExpression) {
           indent--;
-          addIndentation();
-          buffer.add("} while (");
-          visitExpressionGraph(condition);
+          addIndented("} while (");
+          generateExpression(condition);
           buffer.add(");\n");
         } else {
-          visitSubGraph(condition);
+          generateStatements(condition);
           indent--;
-          addIndentation();
-          buffer.add("} while (");
-          use(condition.end.last.inputs[0], JSPrecedence.PREFIX_PRECEDENCE);
+          addIndented("} while (");
+          use(condition.conditionExpression, JSPrecedence.PREFIX_PRECEDENCE);
           buffer.add(");\n");
         }
         break;
@@ -641,9 +855,8 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
       default:
         compiler.internalError(
           'Unexpected loop kind: ${info.kind}',
-          instruction: condition.expression);
+          instruction: condition.conditionExpression);
     }
-    visitBasicBlock(info.joinBlock);
     return true;
   }
 
@@ -693,16 +906,12 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     indent++;
 
     startLabeledBlock(labeledBlockInfo);
-    visitSubGraph(labeledBlockInfo.body);
+    generateStatements(labeledBlockInfo.body);
     endLabeledBlock(labeledBlockInfo);
 
     indent--;
-    addIndentation();
-    buffer.add('}\n');
+    addIndented('}\n');
 
-    if (labeledBlockInfo.joinBlock !== null) {
-      visitBasicBlock(labeledBlockInfo.joinBlock);
-    }
     if (labeledBlockInfo.isContinue) {
       while (!continueOverrides.isEmpty()) {
         continueAction.remove(continueOverrides.head);
@@ -726,7 +935,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
 
   // Wraps a loop body in a block to make continues have a target to break
   // to (if necessary).
-  void wrapLoopBodyForContinue(HLoopInformation info) {
+  void wrapLoopBodyForContinue(HLoopBlockInformation info) {
     TargetElement target = info.target;
     if (target !== null && target.isContinueTarget) {
       addIndentation();
@@ -741,10 +950,9 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
       buffer.add(":{\n");
       continueAction[info.target] = implicitContinueAsBreak;
       indent++;
-      visitSubGraph(info.body);
+      generateStatements(info.body);
       indent--;
-      addIndentation();
-      buffer.add("}\n");
+      addIndented("}\n");
       continueAction.remove(info.target);
       for (LabelElement label in info.labels) {
         if (label.isContinueTarget) {
@@ -753,8 +961,31 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
       }
     } else {
       // Loop body contains no continues, so we don't need a break target.
-      visitSubGraph(info.body);
+      generateStatements(info.body);
     }
+  }
+
+  bool handleBlockFlow(HBlockFlow block) {
+    HBlockInformation info = block.body;
+    // If we reach here again while handling the attached information,
+    // e.g., because we call visitSubGraph on a subgraph starting on
+    // the same block, don't handle it again.
+    // When the structure graph is complete, we will be able to have
+    // different structures starting on the same basic block (e.g., an
+    // "if" and its condition).
+    if (info === currentBlockInformation) return false;
+
+    HBlockInformation oldBlockInformation = currentBlockInformation;
+    currentBlockInformation = info;
+    bool success = info.accept(this);
+    currentBlockInformation = oldBlockInformation;
+    if (success) {
+      HBasicBlock continuation = block.continuation;
+      if (continuation !== null) {
+        visitBasicBlock(continuation);
+      }
+    }
+    return success;
   }
 
   void visitBasicBlock(HBasicBlock node) {
@@ -762,105 +993,184 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     if (!subGraph.contains(node)) return;
 
     currentBlock = node;
-    // If this node has special behavior attached, handle it.
-    // If we reach here again while handling the attached information,
-    // e.g., because we call visitSubGraph on a subgraph starting here,
-    // don't handle it again.
-    if (node.blockInformation !== null &&
-        node.blockInformation !== currentBlockInformation) {
-      HBlockInformation oldBlockInformation = currentBlockInformation;
-      currentBlockInformation = node.blockInformation;
-      bool success = currentBlockInformation.accept(this);
-      currentBlockInformation = oldBlockInformation;
-      if (success) return;
-
-      // If our special handling didn't succeed, we have to emit a generic
-      // version. This still requires special handling for loop-blocks
-      if (node.isLoopHeader()) {
-        beginLoop(node);
-      }
+    // If this node has block-structure based information attached,
+    // try using that to traverse from here.
+    if (node.blockFlow !== null &&
+        handleBlockFlow(node.blockFlow)) {
+      return;
+    }
+    // Flow based traversal.
+    if (node.isLoopHeader() &&
+        node.loopInformation.loopBlockInformation !== currentBlockInformation) {
+      beginLoop(node);
     }
     iterateBasicBlock(node);
+  }
+
+  /** Generates the assignments for all phis of successors blocks. */
+  void assignPhisOfAllSuccessors(HBasicBlock node) {
+    Map<HInstruction, String> temporaryNamesOfPhis = null;
+
+    /**
+     * Generates the assignment [canonicalPhi] = [value].
+     *
+     * If the [canonicalPhi] has a temporary name (in [temporaryNamesOfPhis])
+     * then the temporary is assigned instead of the [canonicalPhi]. However,
+     * when the left and right-hand side are equal ([:canonicalPhi === value:])
+     * then the [canonicalPhi] is assigned with the temporary.
+     */
+    void generateAssignment(HPhi canonicalPhi, HInstruction value) {
+      if (isGeneratingExpression()) {
+        addExpressionSeparator();
+      } else {
+        addIndentation();
+      }
+      if (temporaryNamesOfPhis !== null &&
+          canonicalPhi !== value &&
+          temporaryNamesOfPhis.containsKey(canonicalPhi)) {
+        // This is the assignment to the temporary.
+        declareVariable(temporaryNamesOfPhis[canonicalPhi]);
+      } else if (!temporaryExists(canonicalPhi)) {
+        declareVariable(temporary(canonicalPhi));
+      } else {
+        buffer.add(temporary(canonicalPhi));
+      }
+      buffer.add(" = ");
+      bool isLogicalOperation = logicalOperations.containsKey(canonicalPhi);
+      if (isLogicalOperation) {
+        emitLogicalOperation(canonicalPhi, logicalOperations[canonicalPhi]);
+      } else if (canonicalPhi === value) {
+        buffer.add(temporaryNamesOfPhis[value]);
+      } else {
+        use(value, JSPrecedence.ASSIGNMENT_PRECEDENCE);
+      }
+      if (!isGeneratingExpression()) {
+        buffer.add(';\n');
+      }
+    }
+
+    // Assignments are delayed so that we don't overwrite phis that might
+    // be used as inputs.
+    // TODO(floitsch): improve phi assignments. Currently we introduce
+    // way too many temporary variables.
+    Map<HPhi, HInstruction> phiAssignments = new Map<HPhi, HInstruction>();
+
+    for (HBasicBlock successor in node.successors) {
+      int index = successor.predecessors.indexOf(node);
+      successor.forEachPhi((HPhi phi) {
+        bool isLogicalOperation = logicalOperations.containsKey(phi);
+        // In case the phi is being generated by another
+        // instruction.
+        if (isLogicalOperation && isGenerateAtUseSite(phi)) return;
+        HPhi canonicalPhi = phiEquivalence.getRepresentative(phi);
+        assert(!isLogicalOperation || canonicalPhi === phi);
+        HInstruction input = phi.inputs[index];
+        if (input is HPhi) {
+          input = phiEquivalence.getRepresentative(input);
+          // If we use the same variable, we don't need to create an
+          // assignment.
+          if (input === canonicalPhi) {
+            assert(!isLogicalOperation);
+            return;
+          }
+        }
+        phiAssignments[canonicalPhi] = input;
+      });
+    }
+
+    Set<HPhi> inputPhis = new Set<HPhi>();
+    List<HPhi> phis = <HPhi>[];
+
+    /**
+     * Transitively collects the phis that are used when emitting the [input]
+     * and adds them to [inputPhis]. Does not add phis that are equal to the
+     * [targetPhi] or are not in the [phiAssignments] map.
+     */
+    void collectInputPhis(HInstruction input, HPhi targetPhi) {
+      if (input is HPhi) {
+        HPhi canonicalPhi = phiEquivalence.getRepresentative(input);
+        // Self-updates are ok.
+        if (canonicalPhi !== targetPhi &&
+            phiAssignments.containsKey(canonicalPhi)) {
+          inputPhis.add(canonicalPhi);
+        }
+      } else if (isGenerateAtUseSite(input)) {
+        for (HInstruction inputOfInput in input.inputs) {
+          collectInputPhis(inputOfInput, targetPhi);
+        }
+      }
+    }
+
+    phiAssignments.forEach((HPhi targetPhi, HInstruction input) {
+      phis.add(targetPhi);
+      collectInputPhis(input, targetPhi);
+    });
+
+    if (inputPhis.isEmpty()) {
+      phiAssignments.forEach(generateAssignment);
+    } else {
+      // Emit the phiX=phiY assignments, taking care to break cycles.
+      // Example program:
+      //   var x = 499;
+      //   var y = 99;
+      //   while (x != 99) {
+      //     var tmp = x;  // <=== The tmp variable is removed in Ssa-form.
+      //     x = y;
+      //     y = tmp;
+      //   }
+      //
+      temporaryNamesOfPhis = new HashMap<HInstruction, String>();
+      // For phis that are used as inputs simply *always* allocate a
+      // temporary.
+      for (HPhi phi in phis) {
+        if (inputPhis.contains(phi)) {
+          String temporaryPhi = freshTemporary();
+          temporaryNamesOfPhis[phi] = temporaryPhi;
+        }
+        // The assignPhi uses temporary variables for the left-hand side if
+        // they exist.
+        generateAssignment(phi, phiAssignments[phi]);
+      }
+      // Finally assign the input phis.
+      for (HPhi phi in inputPhis) {
+        // The assignPhi special-cases phi assignments to itself and recognizes
+        // it as assignment from the temporary variable to the actual phi.
+        generateAssignment(phi, phi);
+      }
+    }
   }
 
   void iterateBasicBlock(HBasicBlock node) {
     HInstruction instruction = node.first;
     while (instruction != null) {
       if (instruction === node.last) {
-        for (HBasicBlock successor in node.successors) {
-          int index = successor.predecessors.indexOf(node);
-          successor.forEachPhi((HPhi phi) {
-            bool isLogicalOperation = logicalOperations.containsKey(phi);
-            // In case the phi is being generated by another
-            // instruction.
-            if (isLogicalOperation && isGenerateAtUseSite(phi)) return;
-            HPhi canonicalPhi = phiEquivalence.getRepresentative(phi);
-            HInstruction input = phi.inputs[index];
-            if (input is HPhi) {
-              HPhi inputPhi = input;
-              HPhi canonicalInput = phiEquivalence.getRepresentative(inputPhi);
-              // If we use the same variable, we don't need to create an
-              // assignment.
-              if (canonicalInput === canonicalPhi) {
-                assert(!isLogicalOperation);
-                return;
-              }
-            }
-            if (isGeneratingExpression()) {
-              addExpressionSeparator();
-            } else {
-              addIndentation();
-            }
-            if (!temporaryExists(canonicalPhi)) {
-              declareVariable(temporary(canonicalPhi));
-            } else {
-              buffer.add(temporary(canonicalPhi));
-            }
-            buffer.add(" = ");
-            if (isLogicalOperation) {
-              emitLogicalOperation(phi, logicalOperations[phi]);
-            } else {
-              use(phi.inputs[index], JSPrecedence.ASSIGNMENT_PRECEDENCE);
-            }
-            if (!isGeneratingExpression()) {
-              buffer.add(';\n');
-            }
-          });
-        }
+        assignPhisOfAllSuccessors(node);
       }
 
-      if (instruction is HGoto || instruction is HExit || instruction is HTry) {
-        visit(instruction, JSPrecedence.STATEMENT_PRECEDENCE);
-        return;
-      } else if (!isGenerateAtUseSite(instruction)) {
-        if (instruction is !HIf && instruction is !HTypeGuard &&
-            instruction is !HLoopBranch && !isGeneratingExpression()) {
-          addIndentation();
+      if (isGenerateAtUseSite(instruction)) {
+        if (instruction is HIf) {
+          HIf hif = instruction;
+          // The "if" is implementing part of a logical expression.
+          // Skip directly forward to to its latest successor, since everything
+          // in-between must also be generateAtUseSite.
+          assert(hif.trueBranch.id < hif.falseBranch.id);
+          visitBasicBlock(hif.falseBranch);
         }
-        if (isGeneratingExpression()) {
+      } else if (instruction is HControlFlow) {
+        if (instruction is HLoopBranch && isGeneratingExpression()) {
           addExpressionSeparator();
         }
-        if (instruction.usedBy.isEmpty()
-            || instruction is HTypeGuard
-            || instruction is HCheck) {
-          visit(instruction, JSPrecedence.STATEMENT_PRECEDENCE);
+        visit(instruction, JSPrecedence.STATEMENT_PRECEDENCE);
+      } else if (instruction is HTypeGuard) {
+        visit(instruction, JSPrecedence.STATEMENT_PRECEDENCE);
+      } else {
+        if (isGeneratingExpression()) {
+          addExpressionSeparator();
         } else {
-          define(instruction);
+          addIndentation();
         }
-        // Control flow instructions, and some other instructions,
-        // know how to handle ';'.
-        if (instruction is !HControlFlow && instruction is !HTypeGuard &&
-            !isGeneratingExpression()) {
-          buffer.add(';\n');
-        }
-      } else if (instruction is HIf) {
-        HIf hif = instruction;
-        // The "if" is implementing part of a logical expression.
-        // Skip directly forward to to its latest successor, since everything
-        // in-between must also be generateAtUseSite.
-        assert(hif.trueBranch.id < hif.falseBranch.id);
-        visitBasicBlock(hif.falseBranch);
-        return;
+        define(instruction);
+        if (!isGeneratingExpression()) buffer.add(';\n');
       }
       instruction = instruction.next;
     }
@@ -879,6 +1189,22 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     }
   }
 
+  // We want the outcome of bit-operations to be positive. We use the unsigned
+  // shift operator to achieve this.
+  visitBitInvokeBinary(HBinaryBitOp node, String op) {
+    if (node.builtin){
+      beginExpression(unsignedShiftPrecedences.precedence);
+      int oldPrecedence = this.expectedPrecedence;
+      this.expectedPrecedence = JSPrecedence.SHIFT_PRECEDENCE;
+      visitInvokeBinary(node, op);
+      buffer.add(' >>> 0');
+      this.expectedPrecedence = oldPrecedence;
+      endExpression(unsignedShiftPrecedences.precedence);
+    } else {
+      visitInvokeBinary(node, op);
+    }
+  }
+
   visitInvokeUnary(HInvokeUnary node, String op) {
     if (node.builtin) {
       beginExpression(JSPrecedence.PREFIX_PRECEDENCE);
@@ -887,6 +1213,22 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
       endExpression(JSPrecedence.PREFIX_PRECEDENCE);
     } else {
       visitInvokeStatic(node);
+    }
+  }
+
+  // We want the outcome of bit-operations to be positive. We use the unsigned
+  // shift operator to achieve this.
+  visitBitInvokeUnary(HInvokeUnary node, String op) {
+    if (node.builtin){
+      beginExpression(unsignedShiftPrecedences.precedence);
+      int oldPrecedence = this.expectedPrecedence;
+      this.expectedPrecedence = JSPrecedence.SHIFT_PRECEDENCE;
+      visitInvokeUnary(node, op);
+      buffer.add(' >>> 0');
+      this.expectedPrecedence = oldPrecedence;
+      endExpression(unsignedShiftPrecedences.precedence);
+    } else {
+      visitInvokeUnary(node, op);
     }
   }
 
@@ -919,10 +1261,10 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
   // Modulo cannot be mapped to the native operator (different semantics).
   visitModulo(HModulo node)                     => visitInvokeStatic(node);
 
-  visitBitAnd(HBitAnd node)         => visitInvokeBinary(node, '&');
-  visitBitNot(HBitNot node)         => visitInvokeUnary(node, '~');
-  visitBitOr(HBitOr node)           => visitInvokeBinary(node, '|');
-  visitBitXor(HBitXor node)         => visitInvokeBinary(node, '^');
+  visitBitAnd(HBitAnd node)         => visitBitInvokeBinary(node, '&');
+  visitBitNot(HBitNot node)         => visitBitInvokeUnary(node, '~');
+  visitBitOr(HBitOr node)           => visitBitInvokeBinary(node, '|');
+  visitBitXor(HBitXor node)         => visitBitInvokeBinary(node, '^');
 
   // We need to check if the left operand is negative in order to use
   // the native operator.
@@ -1004,16 +1346,14 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     if (node.label !== null) {
       LabelElement label = node.label;
       if (!tryCallAction(breakAction, label)) {
-        addIndentation();
-        buffer.add("break ");
+        addIndented("break ");
         writeLabel(label);
         buffer.add(";\n");
       }
     } else {
       TargetElement target = node.target;
       if (!tryCallAction(breakAction, target)) {
-        addIndentation();
-        buffer.add("break;\n");
+        addIndented("break;\n");
       }
     }
   }
@@ -1023,64 +1363,42 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     if (node.label !== null) {
       LabelElement label = node.label;
       if (!tryCallAction(continueAction, label)) {
-        addIndentation();
-        buffer.add("continue ");
+        addIndented("continue ");
         writeLabel(label);
         buffer.add(";\n");
       }
     } else {
       TargetElement target = node.target;
       if (!tryCallAction(continueAction, target)) {
-        addIndentation();
-        buffer.add("continue;\n");
+        addIndented("continue;\n");
       }
     }
   }
 
   visitTry(HTry node) {
-    addIndentation();
-    buffer.add('try {\n');
-    indent++;
-    List<HBasicBlock> successors = node.block.successors;
-    visitBasicBlock(successors[0]);
-    indent--;
-
-    if (node.finallyBlock != successors[1]) {
-      // Printing the catch part.
-      addIndentation();
-      String name = temporary(node.exception);
-      parameterNames[node.exception.element] = name;
-      buffer.add('} catch ($name) {\n');
-      indent++;
-      visitBasicBlock(successors[1]);
-      parameterNames.remove(node.exception.element);
-      indent--;
-    }
-
-    if (node.finallyBlock != null) {
-      addIndentation();
-      buffer.add('} finally {\n');
-      indent++;
-      visitBasicBlock(node.finallyBlock);
-      indent--;
-    }
-    addIndentation();
-    buffer.add('}\n');
-
-    visitBasicBlock(node.joinBlock);
+    // We should never get here. Try/catch/finally is always handled using block
+    // information in [visitTryInfo], or not at all, in the case of the bailout
+    // generator.
+    unreachable();
   }
 
   visitIf(HIf node) {
+    if (subGraph !== null && node.block === subGraph.end) {
+      if (isGeneratingExpression()) {
+        use(node.inputs[0], JSPrecedence.EXPRESSION_PRECEDENCE);
+      }
+      return;
+    }
     HInstruction condition = node.inputs[0];
     int preVisitedBlocks = 0;
     List<HBasicBlock> dominated = node.block.dominatedBlocks;
-    HIfBlockInformation info = node.blockInformation;
+    HIfBlockInformation info = node.blockInformation.body;
     if (condition.isConstant()) {
       HConstant constant = condition;
       if (constant.constant.isTrue()) {
-        visitSubGraph(info.thenGraph);
+        generateStatements(info.thenGraph);
       } else if (node.hasElse) {
-        visitSubGraph(info.elseGraph);
+        generateStatements(info.elseGraph);
       }
       // We ignore the other branch, even if it isn't visited.
       preVisitedBlocks = node.hasElse ? 2 : 1;
@@ -1089,23 +1407,24 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
       assert(!isGenerateAtUseSite(node));
       startThen(node);
       assert(node.thenBlock === dominated[0]);
-      visitSubGraph(info.thenGraph);
+      generateStatements(info.thenGraph);
       preVisitedBlocks++;
       endThen(node);
       if (node.hasElse) {
         startElse(node);
         assert(node.elseBlock === dominated[1]);
-        visitSubGraph(info.elseGraph);
+        generateStatements(info.elseGraph);
         preVisitedBlocks++;
         endElse(node);
       }
       endIf(node);
     }
-    if (info.joinBlock !== null && info.joinBlock.dominator !== node.block) {
+    HBasicBlock joinBlock = node.joinBlock;
+    if (joinBlock !== null && joinBlock.dominator !== node.block) {
       // The join block is dominated by a block in one of the branches.
       // The subgraph traversal never reached it, so we visit it here
       // instead.
-      visitBasicBlock(info.joinBlock);
+      visitBasicBlock(joinBlock);
     }
 
     // Visit all the dominated blocks that are not part of the then or else
@@ -1143,18 +1462,21 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
         // If we know we're calling a specific method, register that
         // method only.
         compiler.registerDynamicInvocationOf(node.element);
-      } else if (node.inputs[0] is HThis) {
-        // TODO(ngeoffray): We should propagate an union type in
-        // earlier phases instead of just checking if the receiver is 'this'.
-        ClassElement cls = work.element.enclosingElement;
-        Type type = cls.computeType(compiler);
-        compiler.registerDynamicInvocation(
-            node.name, new TypedSelector(type, node.selector));
       } else {
-        compiler.registerDynamicInvocation(node.name, node.selector);
+        compiler.registerDynamicInvocation(
+            node.name, getOptimizedSelectorFor(node, node.selector));
       }
     }
     endExpression(JSPrecedence.CALL_PRECEDENCE);
+  }
+
+  Selector getOptimizedSelectorFor(HInvoke node, Selector defaultSelector) {
+    Type receiverType = node.inputs[0].propagatedType.computeType(compiler);
+    if (receiverType !== null) {
+      return new TypedSelector(receiverType, defaultSelector);
+    } else {
+      return defaultSelector;
+    }
   }
 
   visitInvokeDynamicSetter(HInvokeDynamicSetter node) {
@@ -1163,14 +1485,8 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     buffer.add('.');
     buffer.add(compiler.namer.setterName(currentLibrary, node.name));
     visitArguments(node.inputs);
-    if (node.inputs[0] is HThis) {
-      ClassElement cls = work.element.enclosingElement;
-      Type type = cls.computeType(compiler);
-      compiler.registerDynamicSetter(node.name,
-          new TypedSelector(type, Selector.SETTER));
-    } else {
-      compiler.registerDynamicSetter(node.name, Selector.SETTER);
-    }
+    compiler.registerDynamicSetter(
+        node.name, getOptimizedSelectorFor(node, Selector.SETTER));
     endExpression(JSPrecedence.CALL_PRECEDENCE);
   }
 
@@ -1180,14 +1496,8 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     buffer.add('.');
     buffer.add(compiler.namer.getterName(currentLibrary, node.name));
     visitArguments(node.inputs);
-    if (node.inputs[0] is HThis) {
-      ClassElement cls = work.element.enclosingElement;
-      Type type = cls.computeType(compiler);
-      compiler.registerDynamicGetter(node.name,
-          new TypedSelector(type, Selector.GETTER));
-    } else {
-      compiler.registerDynamicGetter(node.name, Selector.GETTER);
-    }
+    compiler.registerDynamicGetter(
+        node.name, getOptimizedSelectorFor(node, Selector.GETTER));
     endExpression(JSPrecedence.CALL_PRECEDENCE);
   }
 
@@ -1216,7 +1526,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     Element superClass = superMethod.enclosingElement;
     // Remove the element and 'this'.
     int argumentCount = node.inputs.length - 2;
-    String className = compiler.namer.isolatePropertyAccess(superClass);
+    String className = compiler.namer.isolateAccess(superClass);
     if (superMethod.kind == ElementKind.FUNCTION ||
         superMethod.kind == ElementKind.GENERATIVE_CONSTRUCTOR) {
       String methodName = compiler.namer.instanceMethodName(
@@ -1238,26 +1548,22 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
   visitFieldGet(HFieldGet node) {
     if (node.receiver !== null) {
       String name =
-          compiler.namer.instanceFieldName(currentLibrary, node.element.name);
+          compiler.namer.instanceFieldName(currentLibrary, node.name);
       beginExpression(JSPrecedence.MEMBER_PRECEDENCE);
       use(node.receiver, JSPrecedence.MEMBER_PRECEDENCE);
       buffer.add('.');
       buffer.add(name);
       beginExpression(JSPrecedence.MEMBER_PRECEDENCE);
     } else {
-      buffer.add(JsNames.getValid(node.element.name.slowToString()));
+      buffer.add(JsNames.getValid(node.name.slowToString()));
     }
   }
 
   visitFieldSet(HFieldSet node) {
-    // This method may introduce variable declarations in the JS code.
-    // If we are generating an expression, those variable declarations
-    // must be delayed until later.
-    bool delayDeclaration = false;
     String name;
     if (node.receiver !== null) {
       name =
-          compiler.namer.instanceFieldName(currentLibrary, node.element.name);
+          compiler.namer.instanceFieldName(currentLibrary, node.name);
       beginExpression(JSPrecedence.ASSIGNMENT_PRECEDENCE);
       use(node.receiver, JSPrecedence.MEMBER_PRECEDENCE);
       buffer.add('.');
@@ -1265,10 +1571,9 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     } else {
       // TODO(ngeoffray): Remove the 'var' once we don't globally box
       // variables used in a try/catch.
-      name = JsNames.getValid(node.element.name.slowToString());
+      name = JsNames.getValid(node.name.slowToString());
       declareVariable(name);
     }
-    if (delayDeclaration) delayedVarDecl = delayedVarDecl.prepend(name);
     buffer.add(' = ');
     use(node.value, JSPrecedence.ASSIGNMENT_PRECEDENCE);
     if (node.receiver !== null) {
@@ -1332,7 +1637,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
   }
 
   visitLoopBranch(HLoopBranch node) {
-    if (subGraph !== null && node.block == subGraph.end) {
+    if (subGraph !== null && node.block === subGraph.end) {
       // We are generating code for a loop condition.
       // If doing this as part of a SubGraph traversal, the
       // calling code will handle the control flow logic.
@@ -1340,7 +1645,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
       // If we are generating the subgraph as an expression, the
       // condition will be generated as the expression.
       // Otherwise, we don't generate the expression, and leave that
-      // to the code that called visitSubGraph.
+      // to the code that called [visitSubGraph].
       if (isGeneratingExpression()) {
         use(node.inputs[0], JSPrecedence.EXPRESSION_PRECEDENCE);
       }
@@ -1370,11 +1675,40 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
   }
 
   visitNot(HNot node) {
+    bool isBuiltinRelational(HInstruction instruction) {
+      if (instruction is !HRelational) return false;
+      HRelational relational = instruction;
+      return relational.builtin;
+    }
+
     assert(node.inputs.length == 1);
-    beginExpression(JSPrecedence.PREFIX_PRECEDENCE);
-    buffer.add('!');
-    use(node.inputs[0], JSPrecedence.PREFIX_PRECEDENCE);
-    endExpression(JSPrecedence.PREFIX_PRECEDENCE);
+    HInstruction input = node.inputs[0];
+    if (input is HBoolify && isGenerateAtUseSite(input)) {
+      beginExpression(JSPrecedence.EQUALITY_PRECEDENCE);
+      assert(node.inputs.length == 1);
+      use(input.inputs[0], JSPrecedence.EQUALITY_PRECEDENCE);
+      buffer.add(' !== true');
+      endExpression(JSPrecedence.EQUALITY_PRECEDENCE);
+    } else if (isBuiltinRelational(input) && isGenerateAtUseSite(input)) {
+      Map<String, String> inverseOperator = const <String>{
+        "==" : "!=",
+        "!=" : "==",
+        "===": "!==",
+        "!==": "===",
+        "<"  : ">=",
+        "<=" : ">",
+        ">"  : "<=",
+        ">=" : "<"
+      };
+      HRelational relational = input;
+      visitInvokeBinary(input,
+                        inverseOperator[relational.operation.name.stringValue]);
+    } else {
+      beginExpression(JSPrecedence.PREFIX_PRECEDENCE);
+      buffer.add('!');
+      use(input, JSPrecedence.PREFIX_PRECEDENCE);
+      endExpression(JSPrecedence.PREFIX_PRECEDENCE);
+    }
   }
 
   visitParameterValue(HParameterValue node) {
@@ -1393,6 +1727,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
   }
 
   visitReturn(HReturn node) {
+    addIndentation();
     assert(node.inputs.length == 1);
     HInstruction input = node.inputs[0];
     if (input.isConstantNull()) {
@@ -1409,6 +1744,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
   }
 
   visitThrow(HThrow node) {
+    addIndentation();
     if (node.isRethrow) {
       buffer.add('throw ');
       use(node.inputs[0], JSPrecedence.EXPRESSION_PRECEDENCE);
@@ -1467,6 +1803,11 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
     for (int i = 0; i < indent; i++) {
       buffer.add('  ');
     }
+  }
+
+  void addIndented(String text) {
+    addIndentation();
+    buffer.add(text);
   }
 
   void visitStatic(HStatic node) {
@@ -1548,7 +1889,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
         return 'lastIndexOf';
       }
     }
-    
+
     if (receiver.isExtendableArray() && !getter) {
       if (name == const SourceString('add')) {
         return 'push';
@@ -1557,7 +1898,7 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
         return 'pop';
       }
     }
-    
+
     if (receiver.isString() && !getter) {
       if (name == const SourceString('concat')
           && interceptor.inputs[2].isString()) {
@@ -1657,7 +1998,11 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
   }
 
   void checkExtendableArray(HInstruction input) {
-    compiler.unimplemented("check extendable array");
+    beginExpression(JSPrecedence.PREFIX_PRECEDENCE);
+    buffer.add('!!');
+    use(input, JSPrecedence.MEMBER_PRECEDENCE);
+    buffer.add('.fixed\$length');
+    endExpression(JSPrecedence.PREFIX_PRECEDENCE);
   }
 
   void checkNull(HInstruction input) {
@@ -1727,23 +2072,23 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
   }
 
   void visitIs(HIs node) {
-    Type type = node.typeName;
+    Type type = node.typeExpression;
     Element element = type.element;
     if (element.kind === ElementKind.TYPE_VARIABLE) {
-      compiler.unimplemented("visitIs for type variables");
+      compiler.unimplemented("visitIs for type variables", instruction: node);
     } else if (element.kind === ElementKind.TYPEDEF) {
-      compiler.unimplemented("visitIs for typedefs");
+      compiler.unimplemented("visitIs for typedefs", instruction: node);
     }
-    compiler.registerIsCheck(element);
+    compiler.registerIsCheck(type.element);
     LibraryElement coreLibrary = compiler.coreLibrary;
     ClassElement objectClass = compiler.objectClass;
     HInstruction input = node.expression;
+
     if (node.nullOk) {
       beginExpression(JSPrecedence.LOGICAL_OR_PRECEDENCE);
       checkNull(input);
       buffer.add(' || ');
     }
-
     if (element === objectClass || element === compiler.dynamicClass) {
       // The constant folder also does this optimization, but we make
       // it safe by assuming it may have not run.
@@ -1765,20 +2110,93 @@ class SsaCodeGenerator implements HVisitor, HBlockInformationVisitor {
       checkInt(input, '===');
       endExpression(JSPrecedence.LOGICAL_AND_PRECEDENCE);
     } else if (Elements.isStringSupertype(element, compiler)) {
-        handleStringSupertypeCheck(input, element);
+      handleStringSupertypeCheck(input, element);
     } else if (element === compiler.listClass
                || Elements.isListSupertype(element, compiler)) {
       handleListOrSupertypeCheck(input, element);
-    } else {
+    } else if (input.propagatedType.canBePrimitive()
+               || input.propagatedType.canBeNull()) {
       beginExpression(JSPrecedence.LOGICAL_AND_PRECEDENCE);
       checkObject(input, '===');
       buffer.add(' && ');
       checkType(input, element);
       endExpression(JSPrecedence.LOGICAL_AND_PRECEDENCE);
+    } else {
+      checkType(input, element);
     }
-
+    if (compiler.universe.rti.hasTypeArguments(type)) {
+      InterfaceType interfaceType = type;
+      ClassElement cls = type.element;
+      Link<Type> arguments = interfaceType.arguments;
+      buffer.add(' && ');
+      checkObject(node.typeInfoCall, '===');
+      cls.typeParameters.forEach((name, _) {
+        buffer.add(' && ');
+        beginExpression(JSPrecedence.LOGICAL_AND_PRECEDENCE);
+        use(node.typeInfoCall, JSPrecedence.EQUALITY_PRECEDENCE);
+        buffer.add(".${name.slowToString()} === '${arguments.head}'");
+        endExpression(JSPrecedence.LOGICAL_AND_PRECEDENCE);
+      });
+    }
     if (node.nullOk) {
       endExpression(JSPrecedence.LOGICAL_OR_PRECEDENCE);
+    }
+  }
+
+  void visitTypeConversion(HTypeConversion node) {
+    if (node.checked) {
+      Element element = node.type.computeType(compiler).element;
+      compiler.registerIsCheck(element);
+      SourceString helper;
+      String additionalArgument;
+      bool nativeCheck =
+          compiler.emitter.nativeEmitter.requiresNativeIsCheck(element);
+      beginExpression(JSPrecedence.CALL_PRECEDENCE);
+
+      if (element == compiler.stringClass) {
+        helper = const SourceString('stringTypeCheck');
+      } else if (element == compiler.doubleClass) {
+        helper = const SourceString('doubleTypeCheck');
+      } else if (element == compiler.numClass) {
+        helper = const SourceString('numTypeCheck');
+      } else if (element == compiler.boolClass) {
+        helper = const SourceString('boolTypeCheck');
+      } else if (element == compiler.functionClass || element.isTypedef()) {
+        helper = const SourceString('functionTypeCheck');
+      } else if (element == compiler.intClass) {
+        helper = const SourceString('intTypeCheck');
+      } else if (Elements.isStringSupertype(element, compiler)) {
+        if (nativeCheck) {
+          helper = const SourceString('stringSuperNativeTypeCheck');
+        } else {
+          helper = const SourceString('stringSuperTypeCheck');
+        }
+      } else if (element === compiler.listClass) {
+        helper = const SourceString('listTypeCheck');
+      } else {
+        additionalArgument = compiler.namer.operatorIs(element);
+        if (Elements.isListSupertype(element, compiler)) {
+          if (nativeCheck) {
+            helper = const SourceString('listSuperNativeTypeCheck');
+          } else {
+            helper = const SourceString('listSuperTypeCheck');
+          }
+        } else if (nativeCheck) {
+          helper = const SourceString('callTypeCheck');
+        } else {
+          helper = const SourceString('propertyTypeCheck');
+        }
+      }
+      Element helperElement = compiler.findHelper(helper);
+      compiler.registerStaticUse(helperElement);
+      buffer.add(compiler.namer.isolateAccess(helperElement));
+      buffer.add('(');
+      use(node.checkedInput, JSPrecedence.EXPRESSION_PRECEDENCE);
+      if (additionalArgument !== null) buffer.add(", '$additionalArgument'");
+      buffer.add(')');
+      endExpression(JSPrecedence.CALL_PRECEDENCE);
+    } else {
+      use(node.checkedInput, expectedPrecedence);
     }
   }
 }
@@ -1890,7 +2308,7 @@ class SsaOptimizedCodeGenerator extends SsaCodeGenerator {
 
   void beginLoop(HBasicBlock block) {
     addIndentation();
-    HLoopInformation info = block.blockInformation;
+    HLoopInformation info = block.loopInformation;
     for (LabelElement label in info.labels) {
       writeLabel(label);
       buffer.add(":");
@@ -1901,8 +2319,7 @@ class SsaOptimizedCodeGenerator extends SsaCodeGenerator {
 
   void endLoop(HBasicBlock block) {
     indent--;
-    addIndentation();
-    buffer.add('}\n');  // Close 'while' loop.
+    addIndented('}\n');  // Close 'while' loop.
   }
 
   void handleLoopCondition(HLoopBranch node) {
@@ -1916,13 +2333,11 @@ class SsaOptimizedCodeGenerator extends SsaCodeGenerator {
 
   void endIf(HIf node) {
     indent--;
-    addIndentation();
-    buffer.add('}\n');
+    addIndented('}\n');
   }
 
   void startThen(HIf node) {
-    addIndentation();
-    buffer.add('if (');
+    addIndented('if (');
     use(node.inputs[0], JSPrecedence.EXPRESSION_PRECEDENCE);
     buffer.add(') {\n');
     indent++;
@@ -1933,8 +2348,7 @@ class SsaOptimizedCodeGenerator extends SsaCodeGenerator {
 
   void startElse(HIf node) {
     indent--;
-    addIndentation();
-    buffer.add('} else {\n');
+    addIndented('} else {\n');
     indent++;
   }
 
@@ -1979,11 +2393,9 @@ class SsaUnoptimizedCodeGenerator extends SsaCodeGenerator {
 
   void beginGraph(HGraph graph) {
     if (!graph.entry.hasGuards()) return;
-    addIndentation();
-    buffer.add('switch (state) {\n');
+    addIndented('switch (state) {\n');
     indent++;
-    addIndentation();
-    buffer.add('case 0:\n');
+    addIndented('case 0:\n');
     indent++;
 
     // The setup phase of a bailout function sets up the environment for
@@ -1996,8 +2408,7 @@ class SsaUnoptimizedCodeGenerator extends SsaCodeGenerator {
     if (!graph.entry.hasGuards()) return;
     indent--; // Close original case.
     indent--;
-    addIndentation();
-    buffer.add('}\n');  // Close 'switch'.
+    addIndented('}\n');  // Close 'switch'.
     setup.add('  }\n');
   }
 
@@ -2019,15 +2430,17 @@ class SsaUnoptimizedCodeGenerator extends SsaCodeGenerator {
     }
   }
 
-  bool visitLoopInfo(HLoopInformation info) => false;
+  bool visitAndOrInfo(HAndOrBlockInformation info) => false;
+  bool visitIfInfo(HIfBlockInformation info) => false;
+  bool visitLoopInfo(HLoopBlockInformation info) => false;
+  bool visitTryInfo(HTryBlockInformation info) => false;
+  bool visitSequenceInfo(HStatementSequenceInformation info) => false;
 
   void visitTypeGuard(HTypeGuard node) {
     indent--;
-    addIndentation();
-    buffer.add('case ${node.state}:\n');
+    addIndented('case ${node.state}:\n');
     indent++;
-    addIndentation();
-    buffer.add('state = 0;\n');
+    addIndented('state = 0;\n');
 
     setup.add('    case ${node.state}:\n');
     int i = 0;
@@ -2050,25 +2463,21 @@ class SsaUnoptimizedCodeGenerator extends SsaCodeGenerator {
 
   void handleBailoutCase(List<HTypeGuard> guards) {
     for (int i = 0, len = guards.length; i < len; i++) {
-      addIndentation();
-      buffer.add('case ${guards[i].state}:\n');
+      addIndented('case ${guards[i].state}:\n');
     }
   }
 
   void startBailoutSwitch() {
-    addIndentation();
-    buffer.add('switch (state) {\n');
+    addIndented('switch (state) {\n');
     indent++;
-    addIndentation();
-    buffer.add('case 0:\n');
+    addIndented('case 0:\n');
     indent++;
   }
 
   void endBailoutSwitch() {
     indent--; // Close 'case'.
     indent--;
-    addIndentation();
-    buffer.add('}\n');  // Close 'switch'.
+    addIndented('}\n');  // Close 'switch'.
   }
 
   void beginLoop(HBasicBlock block) {
@@ -2079,7 +2488,7 @@ class SsaUnoptimizedCodeGenerator extends SsaCodeGenerator {
     }
 
     addIndentation();
-    HLoopInformation loopInformation = block.blockInformation;
+    HLoopInformation loopInformation = block.loopInformation;
     for (LabelElement label in loopInformation.labels) {
       writeLabel(label);
       buffer.add(":");
@@ -2091,8 +2500,7 @@ class SsaUnoptimizedCodeGenerator extends SsaCodeGenerator {
       startBailoutSwitch();
       if (loopInformation.target !== null) {
         breakAction[loopInformation.target] = (TargetElement target) {
-          addIndentation();
-          buffer.add("break $newLabel;\n");
+          addIndented("break $newLabel;\n");
         };
       }
     }
@@ -2103,12 +2511,11 @@ class SsaUnoptimizedCodeGenerator extends SsaCodeGenerator {
     HBasicBlock header = block.isLoopHeader() ? block : block.parentLoopHeader;
     if (header.hasGuards()) {
       endBailoutSwitch();
-      HLoopInformation info = header.blockInformation;
+      HLoopInformation info = header.loopInformation;
       if (info.target != null) breakAction.remove(info.target);
     }
     indent--;
-    addIndentation();
-    buffer.add('}\n');  // Close 'while'.
+    addIndented('}\n');  // Close 'while'.
   }
 
   void handleLoopCondition(HLoopBranch node) {
@@ -2128,15 +2535,13 @@ class SsaUnoptimizedCodeGenerator extends SsaCodeGenerator {
 
   void endIf(HIf node) {
     indent--;
-    addIndentation();
-    buffer.add('}\n');
+    addIndented('}\n');
   }
 
   void startThen(HIf node) {
-    addIndentation();
     bool hasGuards = node.thenBlock.hasGuards()
         || (node.hasElse && node.elseBlock.hasGuards());
-    buffer.add('if (');
+    addIndented('if (');
     int precedence = JSPrecedence.EXPRESSION_PRECEDENCE;
     if (hasGuards) {
       // TODO(ngeoffray): Put the condition initialization in the
@@ -2167,8 +2572,7 @@ class SsaUnoptimizedCodeGenerator extends SsaCodeGenerator {
 
   void startElse(HIf node) {
     indent--;
-    addIndentation();
-    buffer.add('} else {\n');
+    addIndented('} else {\n');
     indent++;
     if (node.elseBlock.hasGuards()) {
       startBailoutSwitch();

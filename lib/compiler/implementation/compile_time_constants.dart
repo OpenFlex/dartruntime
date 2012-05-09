@@ -79,7 +79,7 @@ class NumConstant extends PrimitiveConstant {
 class IntConstant extends NumConstant {
   final int value;
   factory IntConstant(int value) {
-    switch(value) {
+    switch (value) {
       case 0: return const IntConstant._internal(0);
       case 1: return const IntConstant._internal(1);
       case 2: return const IntConstant._internal(2);
@@ -265,8 +265,7 @@ class ObjectConstant extends Constant {
 
   void _writeCanonicalizedJsCode(StringBuffer buffer, ConstantHandler handler) {
     String name = handler.getNameForConstant(this);
-    String isolatePrototype = "${handler.compiler.namer.ISOLATE}.prototype";
-    buffer.add("$isolatePrototype.$name");
+    buffer.add(handler.compiler.namer.isolatePropertiesAccessForConstant(name));
   }
 }
 
@@ -285,8 +284,7 @@ class ListConstant extends ObjectConstant {
   void _writeJsCode(StringBuffer buffer, ConstantHandler handler) {
     // TODO(floitsch): we should not need to go through the compiler to make
     // the list constant.
-    String isolatePrototype = "${handler.compiler.namer.ISOLATE}.prototype";
-    buffer.add("$isolatePrototype.makeConstantList");
+    buffer.add("${handler.compiler.namer.ISOLATE}.makeConstantList");
     buffer.add("([");
     for (int i = 0; i < entries.length; i++) {
       if (i != 0) buffer.add(", ");
@@ -677,23 +675,22 @@ class ConstantHandler extends CompilerTask {
         } else if (code >= 0x80) {
           if (code < 0x100) {
             buffer.add(@'\x');
-            buffer.add(code.toRadixString(16));
           } else {
             buffer.add(@'\u');
             if (code < 0x1000) {
               buffer.add('0');
             }
-            buffer.add(code.toRadixString(16));
           }
+          buffer.add(code.toRadixString(16));
         } else {
-          buffer.add(new String.fromCharCodes(<int>[code]));
+          buffer.addCharCode(code);
         }
       }
     }
   }
 
   String getJsConstructor(ClassElement element) {
-    return compiler.namer.isolatePropertyAccess(element);
+    return compiler.namer.isolatePropertiesAccess(element);
   }
 }
 
@@ -775,7 +772,7 @@ class CompileTimeConstantEvaluator extends AbstractVisitor {
     ClassElement classElement = compiler.jsHelperLibrary.find(className);
     classElement.ensureResolved(compiler);
     // TODO(floitsch): copy over the generic type.
-    Type type = new InterfaceType(classElement.name, classElement);
+    Type type = new InterfaceType(classElement);
     compiler.registerInstantiatedClass(classElement);
     Constant constant = new MapConstant(type, keysList, values, protoValue);
     compiler.constantHandler.registerCompileTimeConstant(constant);
@@ -1045,7 +1042,7 @@ class ConstructorEvaluator extends CompileTimeConstantEvaluator {
    */
   void assignArgumentsToParameters(List<Constant> arguments) {
     // Assign arguments to parameters.
-    FunctionParameters parameters = constructor.computeParameters(compiler);
+    FunctionSignature parameters = constructor.computeSignature(compiler);
     int index = 0;
     parameters.forEachParameter((Element parameter) {
       Constant argument = arguments[index++];

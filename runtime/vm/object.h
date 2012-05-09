@@ -147,8 +147,6 @@ class Object {
     kUnresolvedClassClass,
     kTypeClass,
     kTypeParameterClass,
-    kInstantiatedTypeClass,
-    kAbstractTypeArgumentsClass,
     kTypeArgumentsClass,
     kInstantiatedTypeArgumentsClass,
     kFunctionClass,
@@ -167,6 +165,7 @@ class Object {
     kContextClass,
     kContextScopeClass,
     kICDataClass,
+    kSubtypeTestCacheClass,
     kApiErrorClass,
     kLanguageErrorClass,
     kUnhandledExceptionClass,
@@ -282,12 +281,6 @@ CLASS_LIST_NO_OBJECT(DEFINE_CLASS_TESTER);
       return type_class_;
   }
   static RawClass* type_parameter_class() { return type_parameter_class_; }
-  static RawClass* instantiated_type_class() {
-      return instantiated_type_class_;
-  }
-  static RawClass* abstract_type_arguments_class() {
-    return abstract_type_arguments_class_;
-  }
   static RawClass* type_arguments_class() { return type_arguments_class_; }
   static RawClass* instantiated_type_arguments_class() {
       return instantiated_type_arguments_class_;
@@ -316,6 +309,7 @@ CLASS_LIST_NO_OBJECT(DEFINE_CLASS_TESTER);
   }
   static RawClass* unwind_error_class() { return unwind_error_class_; }
   static RawClass* icdata_class() { return icdata_class_; }
+  static RawClass* subtypetestcache_class() { return subtypetestcache_class_; }
 
   static int GetSingletonClassIndex(const RawClass* raw_class);
   static RawClass* GetSingletonClass(int index);
@@ -328,6 +322,11 @@ CLASS_LIST_NO_OBJECT(DEFINE_CLASS_TESTER);
                             const char* cname,
                             const Script& script,
                             const Library& lib);
+
+  static void RegisterPrivateClass(const Class& cls,
+                                   const char* cname,
+                                   const Script& script,
+                                   const Library& lib);
 
   static RawError* Init(Isolate* isolate);
   static void InitFromSnapshot(Isolate* isolate);
@@ -373,7 +372,7 @@ CLASS_LIST_NO_OBJECT(DEFINE_CLASS_TESTER);
   RawObject* raw_;  // The raw object reference.
 
  private:
-  static void InitializeObject(uword address, intptr_t size);
+  static void InitializeObject(uword address, intptr_t index, intptr_t size);
 
   cpp_vtable* vtable_address() const {
     uword vtable_addr = reinterpret_cast<uword>(this);
@@ -395,9 +394,6 @@ CLASS_LIST_NO_OBJECT(DEFINE_CLASS_TESTER);
   static RawClass* unresolved_class_class_;  // Class of UnresolvedClass.
   static RawClass* type_class_;  // Class of Type.
   static RawClass* type_parameter_class_;  // Class of TypeParameter vm object.
-  static RawClass* instantiated_type_class_;  // Class of InstantiatedType.
-  // Class of AbstractTypeArguments vm object.
-  static RawClass* abstract_type_arguments_class_;
   // Class of the TypeArguments vm object.
   static RawClass* type_arguments_class_;
   static RawClass* instantiated_type_arguments_class_;  // Class of Inst..ments.
@@ -417,12 +413,13 @@ CLASS_LIST_NO_OBJECT(DEFINE_CLASS_TESTER);
   static RawClass* context_class_;  // Class of the Context vm object.
   static RawClass* context_scope_class_;  // Class of ContextScope vm object.
   static RawClass* icdata_class_;  // Class of ICData.
+  static RawClass* subtypetestcache_class_;  // Class of SubtypeTestCache.
   static RawClass* api_error_class_;  // Class of ApiError.
   static RawClass* language_error_class_;  // Class of LanguageError.
   static RawClass* unhandled_exception_class_;  // Class of UnhandledException.
   static RawClass* unwind_error_class_;  // Class of UnwindError.
 
-  friend void RawObject::Validate() const;
+  friend void RawObject::Validate(Isolate* isolate) const;
   friend class SnapshotReader;
 
   // Disallow allocation.
@@ -463,8 +460,13 @@ class Class : public Object {
   }
 
   ObjectKind instance_kind() const { return raw_ptr()->instance_kind_; }
-  void set_instance_kind(ObjectKind value) {
+  void set_instance_kind(ObjectKind value) const {
     raw_ptr()->instance_kind_ = value;
+  }
+
+  intptr_t index() const { return raw_ptr()->index_; }
+  void set_index(intptr_t value) const {
+    raw_ptr()->index_ = value;
   }
 
   RawString* Name() const;
@@ -607,6 +609,9 @@ class Class : public Object {
   RawArray* fields() const { return raw_ptr()->fields_; }
   void SetFields(const Array& value) const;
 
+  // Returns true if non-static fields are defined.
+  bool HasInstanceFields() const;
+
   RawArray* functions() const { return raw_ptr()->functions_; }
   void SetFunctions(const Array& value) const;
 
@@ -677,11 +682,6 @@ class Class : public Object {
   // Allocate a class used for VM internal objects.
   template <class FakeObject> static RawClass* New();
 
-  // Allocate an instance class which has a VM implementation.
-  template <class FakeInstance> static RawClass* New(const String& name,
-                                                     const Script& script,
-                                                     intptr_t token_index);
-
   // Allocate instance classes and interfaces.
   static RawClass* New(const String& name,
                        const Script& script,
@@ -730,6 +730,12 @@ class Class : public Object {
                                       intptr_t prefix_length,
                                       const String& name) const;
 
+  // Allocate an instance class which has a VM implementation.
+  template <class FakeInstance> static RawClass* New(intptr_t index);
+  template <class FakeInstance> static RawClass* New(const String& name,
+                                                     const Script& script,
+                                                     intptr_t token_index);
+
   HEAP_OBJECT_IMPLEMENTATION(Class, Object);
   friend class Object;
   friend class Instance;
@@ -774,13 +780,7 @@ class UnresolvedClass : public Object {
 
 
 // AbstractType is an abstract superclass.
-// Subclasses of AbstractType are Type, TypeParameter, and
-// InstantiatedType.
-//
-// Caution: 'RawAbstractType*' denotes a 'raw' pointer to a VM object of class
-// AbstractType, as opposed to 'AbstractType' denoting a 'handle' to the same
-// object. 'RawAbstractType' does not relate to a 'raw type', as opposed to a
-// 'cooked type' or 'rare type'.
+// Subclasses of AbstractType are Type and TypeParameter.
 class AbstractType : public Object {
  public:
   virtual bool IsFinalized() const;
@@ -869,10 +869,6 @@ class AbstractType : public Object {
                                            const String& name,
                                            intptr_t token_index);
 
-  static RawAbstractType* NewInstantiatedType(
-      const AbstractType& uninstantiated_type,
-      const AbstractTypeArguments& instantiator_type_arguments);
-
  protected:
   HEAP_OBJECT_IMPLEMENTATION(AbstractType, Object);
   friend class Class;
@@ -882,6 +878,10 @@ class AbstractType : public Object {
 // A Type consists of a class, possibly parameterized with type
 // arguments. Example: C<T1, T2>.
 // An unresolved class is a String specifying the class name.
+//
+// Caution: 'RawType*' denotes a 'raw' pointer to a VM object of class Type, as
+// opposed to 'Type' denoting a 'handle' to the same object. 'RawType' does not
+// relate to a 'raw type', as opposed to a 'cooked type' or 'rare type'.
 class Type : public AbstractType {
  public:
   static intptr_t type_class_offset() {
@@ -1025,55 +1025,9 @@ class TypeParameter : public AbstractType {
 };
 
 
-// An instance of InstantiatedType is never encountered at compile time, but
-// only at run time, when type parameters can be matched to actual types.
-// An instance of InstantiatedType consists of an uninstantiated AbstractType
-// object and of a AbstractTypeArguments object. The type is uninstantiated,
-// because it refers to at least one TypeParameter object, i.e. to a type that
-// is not known at compile time.
-// The type argument vector is the instantiator, because each type parameter
-// with index i in the uninstantiated type can be substituted (or
-// "instantiated") with the type at index i in the type argument vector.
-class InstantiatedType : public AbstractType {
- public:
-  virtual bool IsFinalized() const { return true; }
-  virtual bool IsBeingFinalized() const { return false; }
-  virtual bool IsMalformed() const { return false; }
-  virtual bool IsResolved() const { return true; }
-  virtual bool HasResolvedTypeClass() const { return true; }
-  virtual RawClass* type_class() const;
-  virtual RawAbstractTypeArguments* arguments() const;
-  virtual intptr_t token_index() const;
-  virtual bool IsInstantiated() const { return true; }
-
-  RawAbstractType* uninstantiated_type() const {
-    return raw_ptr()->uninstantiated_type_;
-  }
-  RawAbstractTypeArguments* instantiator_type_arguments() const {
-    return raw_ptr()->instantiator_type_arguments_;
-  }
-
-  static intptr_t InstanceSize() {
-    return RoundedAllocationSize(sizeof(RawInstantiatedType));
-  }
-
-  static RawInstantiatedType* New(
-      const AbstractType& uninstantiated_type,
-      const AbstractTypeArguments& instantiator_type_arguments);
-
- private:
-  void set_uninstantiated_type(const AbstractType& value) const;
-  void set_instantiator_type_arguments(
-      const AbstractTypeArguments& value) const;
-  static RawInstantiatedType* New();
-
-  HEAP_OBJECT_IMPLEMENTATION(InstantiatedType, AbstractType);
-  friend class Class;
-};
-
-
 // AbstractTypeArguments is an abstract superclass.
-// Subclasses of AbstractTypeArguments are TypeArguments and InstantiatedTypes.
+// Subclasses of AbstractTypeArguments are TypeArguments and
+// InstantiatedTypeArguments.
 class AbstractTypeArguments : public Object {
  public:
   // Returns true if both arguments represent vectors of equal types.
@@ -1190,7 +1144,7 @@ class TypeArguments : public AbstractTypeArguments {
   // Make sure that the array size cannot wrap around.
   static const intptr_t kMaxTypes = 512 * 1024 * 1024;
   RawAbstractType** TypeAddr(intptr_t index) const;
-  void SetLength(intptr_t value);
+  void SetLength(intptr_t value) const;
 
   HEAP_OBJECT_IMPLEMENTATION(TypeArguments, AbstractTypeArguments);
   friend class Class;
@@ -1998,7 +1952,6 @@ class PcDescriptors : public Object {
     kIcCall,     // IC call.
     kFuncCall,   // Call to known target, e.g. static call, closure call.
     kReturn,     // Return from function.
-    kTypeTest,   // Array caching previous type tests.
     kOther
   };
 
@@ -2250,7 +2203,7 @@ class Code : public Object {
     return RoundedAllocationSize(
         sizeof(RawCode) + (pointer_offsets_length * kEntrySize));
   }
-  static RawCode* FinalizeCode(const char* name, Assembler* assembler);
+  static RawCode* FinalizeCode(const Function& function, Assembler* assembler);
   static RawCode* FinalizeStubCode(const char* name, Assembler* assembler);
 
   int32_t GetPointerOffsetAt(int index) const {
@@ -2495,6 +2448,51 @@ class ICData : public Object {
   intptr_t TestEntryLength() const;
 
   HEAP_OBJECT_IMPLEMENTATION(ICData, Object);
+  friend class Class;
+};
+
+
+class SubtypeTestCache : public Object {
+ public:
+  enum Entries {
+    kInstanceClass = 0,
+    kInstanceTypeArguments = 1,
+    kInstantiatorTypeArguments = 2,
+    kTestResult = 3,
+    kTestEntryLength  = 4,
+  };
+
+  intptr_t NumberOfChecks() const;
+  void AddCheck(const Class& instance_class,
+                const AbstractTypeArguments& instance_type_arguments,
+                const AbstractTypeArguments& instantiator_type_arguments,
+                const Bool& test_result) const;
+  void GetCheck(intptr_t ix,
+                Class* instance_class,
+                AbstractTypeArguments* instance_type_arguments,
+                AbstractTypeArguments* instantiator_type_arguments,
+                Bool* test_result) const;
+
+  static RawSubtypeTestCache* New();
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawSubtypeTestCache));
+  }
+
+  static intptr_t cache_offset() {
+    return OFFSET_OF(RawSubtypeTestCache, cache_);
+  }
+
+ private:
+  RawArray* cache() const {
+    return raw_ptr()->cache_;
+  }
+
+  void set_cache(const Array& value) const;
+
+  intptr_t TestEntryLength() const;
+
+  HEAP_OBJECT_IMPLEMENTATION(SubtypeTestCache, Object);
   friend class Class;
 };
 
@@ -3494,7 +3492,7 @@ class Array : public Instance {
     return &raw_ptr()->data()[index];
   }
 
-  void SetLength(intptr_t value) {
+  void SetLength(intptr_t value) const {
     // This is only safe because we create a new Smi, which does not cause
     // heap allocation.
     raw_ptr()->length_ = Smi::New(value);
@@ -3555,8 +3553,10 @@ class GrowableObjectArray : public Instance {
   RawObject* RemoveLast() const;
 
   virtual RawAbstractTypeArguments* GetTypeArguments() const {
-    const Array& contents = Array::Handle(data());
-    return contents.GetTypeArguments();
+    ASSERT(AbstractTypeArguments::AreEqual(
+        AbstractTypeArguments::Handle(Array::Handle(data()).GetTypeArguments()),
+        AbstractTypeArguments::Handle(raw_ptr()->type_arguments_)));
+    return raw_ptr()->type_arguments_;
   }
   virtual void SetTypeArguments(const AbstractTypeArguments& value) const {
     const Array& contents = Array::Handle(data());
@@ -3606,184 +3606,1061 @@ class GrowableObjectArray : public Instance {
 
 class ByteArray : public Instance {
  public:
-  virtual intptr_t Length() const;
-
-  static void Copy(uint8_t* dst,
-                   const ByteArray& src,
-                   intptr_t src_offset,
-                   intptr_t length);
-
-  static void Copy(const ByteArray& dst,
-                   intptr_t dst_offset,
-                   const uint8_t* src,
-                   intptr_t length);
-
-  static void Copy(const ByteArray& dst,
-                   intptr_t dst_offset,
-                   const ByteArray& src,
-                   intptr_t src_offset,
-                   intptr_t length);
-
- private:
-  virtual uint8_t* ByteAddr(intptr_t byte_offset) const;
-
-  HEAP_OBJECT_IMPLEMENTATION(ByteArray, Instance);
-  friend class Class;
-};
-
-
-class InternalByteArray : public ByteArray {
- public:
   intptr_t Length() const {
     ASSERT(!IsNull());
     return Smi::Value(raw_ptr()->length_);
   }
 
   static intptr_t length_offset() {
-    return OFFSET_OF(RawInternalByteArray, length_);
+    return OFFSET_OF(RawByteArray, length_);
+  }
+
+  virtual intptr_t ByteLength() const;
+
+  static void Copy(void* dst,
+                   const ByteArray& src,
+                   intptr_t src_offset,
+                   intptr_t length);
+
+  static void Copy(const ByteArray& dst,
+                   intptr_t dst_offset,
+                   const void* src,
+                   intptr_t length);
+
+  static void Copy(const ByteArray& dst,
+                   intptr_t dst_offset,
+                   const ByteArray& src,
+                   intptr_t src_offset,
+                   intptr_t length);
+
+ protected:
+  virtual uint8_t* ByteAddr(intptr_t byte_offset) const;
+
+  template<typename HandleT, typename RawT>
+  static RawT* NewImpl(const Class& cls,
+                       intptr_t len,
+                       Heap::Space space);
+
+  template<typename HandleT, typename RawT, typename ElementT>
+  static RawT* NewImpl(const Class& cls,
+                       const ElementT* data,
+                       intptr_t len,
+                       Heap::Space space);
+
+  template<typename HandleT, typename RawT, typename ElementT>
+  static RawT* NewExternalImpl(const Class& cls,
+                               ElementT* data,
+                               intptr_t len,
+                               void* peer,
+                               Dart_PeerFinalizer callback,
+                               Heap::Space space);
+
+  template<typename HandleT, typename RawT, typename ElementT>
+  static RawT* ReadFromImpl(SnapshotReader* reader,
+                            intptr_t object_id,
+                            intptr_t tags,
+                            Snapshot::Kind kind);
+
+  void SetLength(intptr_t value) const {
+    raw_ptr()->length_ = Smi::New(value);
+  }
+
+ private:
+  HEAP_OBJECT_IMPLEMENTATION(ByteArray, Instance);
+  friend class Class;
+};
+
+
+class Int8Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length();
+  }
+
+  int8_t At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->data_[index];
+  }
+
+  void SetAt(intptr_t index, int8_t value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->data_[index] = value;
   }
 
   static intptr_t data_offset() {
     return length_offset() + kWordSize;
   }
 
-  template<typename T>
-  T At(intptr_t byte_offset) const {
-    T* addr = Addr<T>(byte_offset);
-    ASSERT(Utils::IsAligned(reinterpret_cast<intptr_t>(addr), sizeof(T)));
-    return *addr;
-  }
-
-  template<typename T>
-  void SetAt(intptr_t byte_offset, T value) const {
-    T* addr = Addr<T>(byte_offset);
-    ASSERT(Utils::IsAligned(reinterpret_cast<intptr_t>(addr), sizeof(T)));
-    *addr = value;
-  }
-
-  template<typename T>
-  T UnalignedAt(intptr_t byte_offset) const {
-    T result;
-    memmove(&result, Addr<T>(byte_offset), sizeof(T));
-    return result;
-  }
-
-  template<typename T>
-  void SetUnalignedAt(intptr_t byte_offset, T value) const {
-    memmove(Addr<T>(byte_offset), &value, sizeof(T));
-  }
-
   static intptr_t InstanceSize() {
-    ASSERT(sizeof(RawInternalByteArray) ==
-           OFFSET_OF_RETURNED_VALUE(RawInternalByteArray, data));
+    ASSERT(sizeof(RawInt8Array) == OFFSET_OF(RawInt8Array, data_));
     return 0;
   }
 
   static intptr_t InstanceSize(intptr_t len) {
-    return RoundedAllocationSize(sizeof(RawInternalByteArray) + len);
+    return RoundedAllocationSize(sizeof(RawInt8Array) + len);
   }
 
-  static RawInternalByteArray* New(intptr_t len,
-                                   Heap::Space space = Heap::kNew);
-  static RawInternalByteArray* New(const uint8_t* data,
-                                   intptr_t len,
-                                   Heap::Space space = Heap::kNew);
+  static RawInt8Array* New(intptr_t len,
+                           Heap::Space space = Heap::kNew);
+  static RawInt8Array* New(const int8_t* data,
+                           intptr_t len,
+                           Heap::Space space = Heap::kNew);
 
  private:
   uint8_t* ByteAddr(intptr_t byte_offset) const {
-    return Addr<uint8_t>(byte_offset);
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    return reinterpret_cast<uint8_t*>(&raw_ptr()->data_) + byte_offset;
   }
 
-  template<typename T>
-  T* Addr(intptr_t byte_offset) const {
-    intptr_t limit = byte_offset + sizeof(T);
-    // TODO(iposva): Determine if we should throw an exception here.
-    ASSERT((byte_offset >= 0) && (limit <= Length()));
-    uint8_t* addr = &raw_ptr()->data()[byte_offset];
-    return reinterpret_cast<T*>(addr);
-  }
-
-  void SetLength(intptr_t value) {
-    raw_ptr()->length_ = Smi::New(value);
-  }
-
-  HEAP_OBJECT_IMPLEMENTATION(InternalByteArray, ByteArray);
+  HEAP_OBJECT_IMPLEMENTATION(Int8Array, ByteArray);
+  friend class ByteArray;
   friend class Class;
 };
 
 
-class ExternalByteArray : public ByteArray {
+class Uint8Array : public ByteArray {
  public:
-  intptr_t Length() const {
-    ASSERT(!IsNull());
-    return Smi::Value(raw_ptr()->length_);
+  intptr_t ByteLength() const {
+    return Length();
+  }
+
+  uint8_t At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->data_[index];
+  }
+
+  void SetAt(intptr_t index, uint8_t value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->data_[index] = value;
+  }
+
+  static intptr_t data_offset() {
+    return length_offset() + kWordSize;
+  }
+
+  static intptr_t InstanceSize() {
+    ASSERT(sizeof(RawUint8Array) == OFFSET_OF(RawUint8Array, data_));
+    return 0;
+  }
+
+  static intptr_t InstanceSize(intptr_t len) {
+    return RoundedAllocationSize(sizeof(RawUint8Array) + len);
+  }
+
+  static RawUint8Array* New(intptr_t len,
+                            Heap::Space space = Heap::kNew);
+  static RawUint8Array* New(const uint8_t* data,
+                            intptr_t len,
+                            Heap::Space space = Heap::kNew);
+
+ private:
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    return reinterpret_cast<uint8_t*>(&raw_ptr()->data_) + byte_offset;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(Uint8Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
+
+
+class Int16Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * kBytesPerElement;
+  }
+
+  int16_t At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->data_[index];
+  }
+
+  void SetAt(intptr_t index, int16_t value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->data_[index] = value;
+  }
+
+  static intptr_t data_offset() {
+    return length_offset() + kWordSize;
+  }
+
+  static intptr_t InstanceSize() {
+    ASSERT(sizeof(RawInt16Array) == OFFSET_OF(RawInt16Array, data_));
+    return 0;
+  }
+
+  static intptr_t InstanceSize(intptr_t len) {
+    intptr_t data_size = len * kBytesPerElement;
+    return RoundedAllocationSize(sizeof(RawInt16Array) + data_size);
+  }
+
+  static RawInt16Array* New(intptr_t len,
+                            Heap::Space space = Heap::kNew);
+  static RawInt16Array* New(const int16_t* data,
+                            intptr_t len,
+                            Heap::Space space = Heap::kNew);
+
+ private:
+  static const intptr_t kBytesPerElement = 2;
+
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    return reinterpret_cast<uint8_t*>(&raw_ptr()->data_) + byte_offset;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(Int16Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
+
+
+class Uint16Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * kBytesPerElement;
+  }
+
+  uint16_t At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->data_[index];
+  }
+
+  void SetAt(intptr_t index, uint16_t value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->data_[index] = value;
+  }
+
+  static intptr_t data_offset() {
+    return length_offset() + kWordSize;
+  }
+
+  static intptr_t InstanceSize() {
+    ASSERT(sizeof(RawUint16Array) == OFFSET_OF(RawUint16Array, data_));
+    return 0;
+  }
+
+  static intptr_t InstanceSize(intptr_t len) {
+    intptr_t data_size = len * kBytesPerElement;
+    return RoundedAllocationSize(sizeof(RawUint16Array) + data_size);
+  }
+
+  static RawUint16Array* New(intptr_t len,
+                             Heap::Space space = Heap::kNew);
+  static RawUint16Array* New(const uint16_t* data,
+                             intptr_t len,
+                             Heap::Space space = Heap::kNew);
+
+ private:
+  static const intptr_t kBytesPerElement = 2;
+
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    return reinterpret_cast<uint8_t*>(&raw_ptr()->data_) + byte_offset;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(Uint16Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
+
+
+class Int32Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * kBytesPerElement;
+  }
+
+  int32_t At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->data_[index];
+  }
+
+  void SetAt(intptr_t index, int32_t value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->data_[index] = value;
+  }
+
+  static intptr_t data_offset() {
+    return length_offset() + kWordSize;
+  }
+
+  static intptr_t InstanceSize() {
+    ASSERT(sizeof(RawInt32Array) == OFFSET_OF(RawInt32Array, data_));
+    return 0;
+  }
+
+  static intptr_t InstanceSize(intptr_t len) {
+    intptr_t data_size = len * kBytesPerElement;
+    return RoundedAllocationSize(sizeof(RawInt32Array) + data_size);
+  }
+
+  static RawInt32Array* New(intptr_t len,
+                            Heap::Space space = Heap::kNew);
+  static RawInt32Array* New(const int32_t* data,
+                            intptr_t len,
+                            Heap::Space space = Heap::kNew);
+
+ private:
+  static const intptr_t kBytesPerElement = 4;
+
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    return reinterpret_cast<uint8_t*>(&raw_ptr()->data_) + byte_offset;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(Int32Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
+
+
+class Uint32Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * kBytesPerElement;
+  }
+
+  uint32_t At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->data_[index];
+  }
+
+  void SetAt(intptr_t index, uint32_t value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->data_[index] = value;
+  }
+
+  static intptr_t data_offset() {
+    return length_offset() + kWordSize;
+  }
+
+  static intptr_t InstanceSize() {
+    ASSERT(sizeof(RawUint32Array) == OFFSET_OF(RawUint32Array, data_));
+    return 0;
+  }
+
+  static intptr_t InstanceSize(intptr_t len) {
+    intptr_t data_size = len * kBytesPerElement;
+    return RoundedAllocationSize(sizeof(RawUint32Array) + data_size);
+  }
+
+  static RawUint32Array* New(intptr_t len,
+                             Heap::Space space = Heap::kNew);
+  static RawUint32Array* New(const uint32_t* data,
+                             intptr_t len,
+                             Heap::Space space = Heap::kNew);
+
+ private:
+  static const intptr_t kBytesPerElement = 4;
+
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    return reinterpret_cast<uint8_t*>(&raw_ptr()->data_) + byte_offset;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(Uint32Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
+
+
+class Int64Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * kBytesPerElement;
+  }
+
+  int64_t At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->data_[index];
+  }
+
+  void SetAt(intptr_t index, int64_t value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->data_[index] = value;
+  }
+
+  static intptr_t data_offset() {
+    return length_offset() + kWordSize;
+  }
+
+  static intptr_t InstanceSize() {
+    ASSERT(sizeof(RawInt64Array) == OFFSET_OF(RawInt64Array, data_));
+    return 0;
+  }
+
+  static intptr_t InstanceSize(intptr_t len) {
+    intptr_t data_size = len * kBytesPerElement;
+    return RoundedAllocationSize(sizeof(RawInt64Array) + data_size);
+  }
+
+  static RawInt64Array* New(intptr_t len,
+                            Heap::Space space = Heap::kNew);
+  static RawInt64Array* New(const int64_t* data,
+                            intptr_t len,
+                            Heap::Space space = Heap::kNew);
+
+ private:
+  static const intptr_t kBytesPerElement = 8;
+
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    return reinterpret_cast<uint8_t*>(&raw_ptr()->data_) + byte_offset;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(Int64Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
+
+
+class Uint64Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * sizeof(uint64_t);
+  }
+
+  uint64_t At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->data_[index];
+  }
+
+  void SetAt(intptr_t index, uint64_t value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->data_[index] = value;
+  }
+
+  static intptr_t data_offset() {
+    return length_offset() + kWordSize;
+  }
+
+  static intptr_t InstanceSize() {
+    ASSERT(sizeof(RawUint64Array) == OFFSET_OF(RawUint64Array, data_));
+    return 0;
+  }
+
+  static intptr_t InstanceSize(intptr_t len) {
+    intptr_t data_size = len * kBytesPerElement;
+    return RoundedAllocationSize(sizeof(RawUint64Array) + data_size);
+  }
+
+  static RawUint64Array* New(intptr_t len,
+                             Heap::Space space = Heap::kNew);
+  static RawUint64Array* New(const uint64_t* data,
+                             intptr_t len,
+                             Heap::Space space = Heap::kNew);
+
+ private:
+  static const intptr_t kBytesPerElement = 8;
+
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    return reinterpret_cast<uint8_t*>(&raw_ptr()->data_) + byte_offset;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(Uint64Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
+
+
+class Float32Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * kBytesPerElement;
+  }
+
+  float At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->data_[index];
+  }
+
+  void SetAt(intptr_t index, float value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->data_[index] = value;
+  }
+
+  static intptr_t data_offset() {
+    return length_offset() + kWordSize;
+  }
+
+  static intptr_t InstanceSize() {
+    ASSERT(sizeof(RawFloat32Array) == OFFSET_OF(RawFloat32Array, data_));
+    return 0;
+  }
+
+  static intptr_t InstanceSize(intptr_t len) {
+    intptr_t data_size = len * kBytesPerElement;
+    return RoundedAllocationSize(sizeof(RawFloat32Array) + data_size);
+  }
+
+  static RawFloat32Array* New(intptr_t len,
+                              Heap::Space space = Heap::kNew);
+  static RawFloat32Array* New(const float* data,
+                              intptr_t len,
+                              Heap::Space space = Heap::kNew);
+
+ private:
+  static const intptr_t kBytesPerElement = 4;
+
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    return reinterpret_cast<uint8_t*>(&raw_ptr()->data_) + byte_offset;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(Float32Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
+
+
+class Float64Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * kBytesPerElement;
+  }
+
+  double At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->data_[index];
+  }
+
+  void SetAt(intptr_t index, double value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->data_[index] = value;
+  }
+
+  static intptr_t InstanceSize() {
+    ASSERT(sizeof(RawFloat64Array) == OFFSET_OF(RawFloat64Array, data_));
+    return 0;
+  }
+
+  static intptr_t data_offset() {
+    return length_offset() + kWordSize;
+  }
+
+  static intptr_t InstanceSize(intptr_t len) {
+    intptr_t data_size = len * kBytesPerElement;
+    return RoundedAllocationSize(sizeof(RawFloat64Array) + data_size);
+  }
+
+  static RawFloat64Array* New(intptr_t len,
+                              Heap::Space space = Heap::kNew);
+  static RawFloat64Array* New(const double* data,
+                              intptr_t len,
+                              Heap::Space space = Heap::kNew);
+
+ private:
+  static const intptr_t kBytesPerElement = 8;
+
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    return reinterpret_cast<uint8_t*>(&raw_ptr()->data_) + byte_offset;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(Float64Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
+
+
+class ExternalInt8Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * kBytesPerElement;
+  }
+
+  int8_t At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->external_data_->data()[index];
+  }
+
+  void SetAt(intptr_t index, int8_t value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->external_data_->data()[index] = value;
   }
 
   void* GetPeer() const {
     return raw_ptr()->external_data_->peer();
   }
 
-  template<typename T>
-  T At(intptr_t byte_offset) const {
-    T* addr = Addr<T>(byte_offset);
-    ASSERT(Utils::IsAligned(reinterpret_cast<intptr_t>(addr), sizeof(T)));
-    return *addr;
-  }
-
-  template<typename T>
-  void SetAt(intptr_t byte_offset, T value) const {
-    T* addr = Addr<T>(byte_offset);
-    ASSERT(Utils::IsAligned(reinterpret_cast<intptr_t>(addr), sizeof(T)));
-    *addr = value;
-  }
-
-  template<typename T>
-  T UnalignedAt(intptr_t byte_offset) const {
-    T result;
-    memmove(&result, Addr<T>(byte_offset), sizeof(T));
-    return result;
-  }
-
-  template<typename T>
-  void SetUnalignedAt(intptr_t byte_offset, T value) const {
-    memmove(Addr<T>(byte_offset), &value, sizeof(T));
-  }
-
   static intptr_t InstanceSize() {
-    return RoundedAllocationSize(sizeof(RawExternalByteArray));
+    return RoundedAllocationSize(sizeof(RawExternalInt8Array));
   }
 
-  static RawExternalByteArray* New(uint8_t* data,
+  static RawExternalInt8Array* New(int8_t* data,
                                    intptr_t len,
                                    void* peer,
                                    Dart_PeerFinalizer callback,
                                    Heap::Space space = Heap::kNew);
 
  private:
+  static const intptr_t kBytesPerElement = 1;
+
   uint8_t* ByteAddr(intptr_t byte_offset) const {
-    return Addr<uint8_t>(byte_offset);
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    uint8_t* data =
+        reinterpret_cast<uint8_t*>(raw_ptr()->external_data_->data());
+    return data + byte_offset;
   }
 
-  template<typename T>
-  T* Addr(intptr_t byte_offset) const {
-    intptr_t limit = byte_offset + sizeof(T);
-    // TODO(iposva): Determine if we should throw an exception here.
-    ASSERT((byte_offset >= 0) && (limit <= Length()));
-    uint8_t* addr = &raw_ptr()->external_data_->data()[byte_offset];
-    return reinterpret_cast<T*>(addr);
-  }
-
-  void SetLength(intptr_t value) {
-    raw_ptr()->length_ = Smi::New(value);
-  }
-
-  void SetExternalData(ExternalByteArrayData* data) {
+  void SetExternalData(ExternalByteArrayData<int8_t>* data) {
     raw_ptr()->external_data_ = data;
   }
 
-  static void Finalize(Dart_Handle handle, void* peer);
+  HEAP_OBJECT_IMPLEMENTATION(ExternalInt8Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
 
-  HEAP_OBJECT_IMPLEMENTATION(ExternalByteArray, ByteArray);
+
+class ExternalUint8Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * kBytesPerElement;
+  }
+
+  uint8_t At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->external_data_->data()[index];
+  }
+
+  void SetAt(intptr_t index, uint8_t value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->external_data_->data()[index] = value;
+  }
+
+  void* GetPeer() const {
+    return raw_ptr()->external_data_->peer();
+  }
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawExternalUint8Array));
+  }
+
+  static RawExternalUint8Array* New(uint8_t* data,
+                                    intptr_t len,
+                                    void* peer,
+                                    Dart_PeerFinalizer callback,
+                                    Heap::Space space = Heap::kNew);
+
+ private:
+  static const intptr_t kBytesPerElement = 1;
+
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    uint8_t* data =
+        reinterpret_cast<uint8_t*>(raw_ptr()->external_data_->data());
+    return data + byte_offset;
+  }
+
+  void SetExternalData(ExternalByteArrayData<uint8_t>* data) {
+    raw_ptr()->external_data_ = data;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(ExternalUint8Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
+
+
+class ExternalInt16Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * kBytesPerElement;
+  }
+
+  int16_t At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->external_data_->data()[index];
+  }
+
+  void SetAt(intptr_t index, int16_t value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->external_data_->data()[index] = value;
+  }
+
+  void* GetPeer() const {
+    return raw_ptr()->external_data_->peer();
+  }
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawExternalInt16Array));
+  }
+
+  static RawExternalInt16Array* New(int16_t* data,
+                                    intptr_t len,
+                                    void* peer,
+                                    Dart_PeerFinalizer callback,
+                                    Heap::Space space = Heap::kNew);
+
+ private:
+  static const intptr_t kBytesPerElement = 2;
+
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    uint8_t* data =
+        reinterpret_cast<uint8_t*>(raw_ptr()->external_data_->data());
+    return data + byte_offset;
+  }
+
+  void SetExternalData(ExternalByteArrayData<int16_t>* data) {
+    raw_ptr()->external_data_ = data;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(ExternalInt16Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
+
+
+class ExternalUint16Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * kBytesPerElement;
+  }
+
+  int16_t At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->external_data_->data()[index];
+  }
+
+  void SetAt(intptr_t index, int16_t value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->external_data_->data()[index] = value;
+  }
+
+  void* GetPeer() const {
+    return raw_ptr()->external_data_->peer();
+  }
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawExternalUint16Array));
+  }
+
+  static RawExternalUint16Array* New(uint16_t* data,
+                                     intptr_t len,
+                                     void* peer,
+                                     Dart_PeerFinalizer callback,
+                                     Heap::Space space = Heap::kNew);
+
+ private:
+  static const intptr_t kBytesPerElement = 2;
+
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    uint8_t* data =
+        reinterpret_cast<uint8_t*>(raw_ptr()->external_data_->data());
+    return data + byte_offset;
+  }
+
+  void SetExternalData(ExternalByteArrayData<uint16_t>* data) {
+    raw_ptr()->external_data_ = data;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(ExternalUint16Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
+
+
+class ExternalInt32Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * kBytesPerElement;
+  }
+
+  int32_t At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->external_data_->data()[index];
+  }
+
+  void SetAt(intptr_t index, int32_t value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->external_data_->data()[index] = value;
+  }
+
+  void* GetPeer() const {
+    return raw_ptr()->external_data_->peer();
+  }
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawExternalInt32Array));
+  }
+
+  static RawExternalInt32Array* New(int32_t* data,
+                                    intptr_t len,
+                                    void* peer,
+                                    Dart_PeerFinalizer callback,
+                                    Heap::Space space = Heap::kNew);
+
+ private:
+  static const intptr_t kBytesPerElement = 4;
+
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    uint8_t* data =
+        reinterpret_cast<uint8_t*>(raw_ptr()->external_data_->data());
+    return data + byte_offset;
+  }
+
+  void SetExternalData(ExternalByteArrayData<int32_t>* data) {
+    raw_ptr()->external_data_ = data;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(ExternalInt32Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
+
+
+class ExternalUint32Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * kBytesPerElement;
+  }
+
+  int32_t At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->external_data_->data()[index];
+  }
+
+  void SetAt(intptr_t index, int32_t value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->external_data_->data()[index] = value;
+  }
+
+  void* GetPeer() const {
+    return raw_ptr()->external_data_->peer();
+  }
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawExternalUint32Array));
+  }
+
+  static RawExternalUint32Array* New(uint32_t* data,
+                                     intptr_t len,
+                                     void* peer,
+                                     Dart_PeerFinalizer callback,
+                                     Heap::Space space = Heap::kNew);
+
+ private:
+  static const intptr_t kBytesPerElement = 4;
+
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    uint8_t* data =
+        reinterpret_cast<uint8_t*>(raw_ptr()->external_data_->data());
+    return data + byte_offset;
+  }
+
+  void SetExternalData(ExternalByteArrayData<uint32_t>* data) {
+    raw_ptr()->external_data_ = data;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(ExternalUint32Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
+
+
+class ExternalInt64Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * kBytesPerElement;
+  }
+
+  int64_t At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->external_data_->data()[index];
+  }
+
+  void SetAt(intptr_t index, int64_t value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->external_data_->data()[index] = value;
+  }
+
+  void* GetPeer() const {
+    return raw_ptr()->external_data_->peer();
+  }
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawExternalInt64Array));
+  }
+
+  static RawExternalInt64Array* New(int64_t* data,
+                                    intptr_t len,
+                                    void* peer,
+                                    Dart_PeerFinalizer callback,
+                                    Heap::Space space = Heap::kNew);
+
+ private:
+  static const intptr_t kBytesPerElement = 8;
+
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    uint8_t* data =
+        reinterpret_cast<uint8_t*>(raw_ptr()->external_data_->data());
+    return data + byte_offset;
+  }
+
+  void SetExternalData(ExternalByteArrayData<int64_t>* data) {
+    raw_ptr()->external_data_ = data;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(ExternalInt64Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
+
+
+class ExternalUint64Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * kBytesPerElement;
+  }
+
+  int64_t At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->external_data_->data()[index];
+  }
+
+  void SetAt(intptr_t index, int64_t value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->external_data_->data()[index] = value;
+  }
+
+  void* GetPeer() const {
+    return raw_ptr()->external_data_->peer();
+  }
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawExternalUint64Array));
+  }
+
+  static RawExternalUint64Array* New(uint64_t* data,
+                                     intptr_t len,
+                                     void* peer,
+                                     Dart_PeerFinalizer callback,
+                                     Heap::Space space = Heap::kNew);
+
+ private:
+  static const intptr_t kBytesPerElement = 8;
+
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    uint8_t* data =
+        reinterpret_cast<uint8_t*>(raw_ptr()->external_data_->data());
+    return data + byte_offset;
+  }
+
+  void SetExternalData(ExternalByteArrayData<uint64_t>* data) {
+    raw_ptr()->external_data_ = data;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(ExternalUint64Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
+
+
+class ExternalFloat32Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * kBytesPerElement;
+  }
+
+  float At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->external_data_->data()[index];
+  }
+
+  void SetAt(intptr_t index, float value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->external_data_->data()[index] = value;
+  }
+
+  void* GetPeer() const {
+    return raw_ptr()->external_data_->peer();
+  }
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawExternalFloat32Array));
+  }
+
+  static RawExternalFloat32Array* New(float* data,
+                                      intptr_t len,
+                                      void* peer,
+                                      Dart_PeerFinalizer callback,
+                                      Heap::Space space = Heap::kNew);
+
+ private:
+  static const intptr_t kBytesPerElement = 4;
+
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    uint8_t* data =
+        reinterpret_cast<uint8_t*>(raw_ptr()->external_data_->data());
+    return data + byte_offset;
+  }
+
+  void SetExternalData(ExternalByteArrayData<float>* data) {
+    raw_ptr()->external_data_ = data;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(ExternalFloat32Array, ByteArray);
+  friend class ByteArray;
+  friend class Class;
+};
+
+
+class ExternalFloat64Array : public ByteArray {
+ public:
+  intptr_t ByteLength() const {
+    return Length() * kBytesPerElement;
+  }
+
+  double At(intptr_t index) const {
+    ASSERT((index >= 0) && (index < Length()));
+    return raw_ptr()->external_data_->data()[index];
+  }
+
+  void SetAt(intptr_t index, double value) const {
+    ASSERT((index >= 0) && (index < Length()));
+    raw_ptr()->external_data_->data()[index] = value;
+  }
+
+  void* GetPeer() const {
+    return raw_ptr()->external_data_->peer();
+  }
+
+  static intptr_t InstanceSize() {
+    return RoundedAllocationSize(sizeof(RawExternalFloat64Array));
+  }
+
+  static RawExternalFloat64Array* New(double* data,
+                                      intptr_t len,
+                                      void* peer,
+                                      Dart_PeerFinalizer callback,
+                                      Heap::Space space = Heap::kNew);
+
+ private:
+  static const intptr_t kBytesPerElement = 8;
+
+  uint8_t* ByteAddr(intptr_t byte_offset) const {
+    ASSERT((byte_offset >= 0) && (byte_offset < ByteLength()));
+    uint8_t* data =
+        reinterpret_cast<uint8_t*>(raw_ptr()->external_data_->data());
+    return data + byte_offset;
+  }
+
+  void SetExternalData(ExternalByteArrayData<double>* data) {
+    raw_ptr()->external_data_ = data;
+  }
+
+  HEAP_OBJECT_IMPLEMENTATION(ExternalFloat64Array, ByteArray);
+  friend class ByteArray;
   friend class Class;
 };
 
@@ -3925,7 +4802,7 @@ class JSRegExp : public Instance {
   void set_type(RegExType type) const { raw_ptr()->type_ = type; }
   void set_flags(intptr_t value) const { raw_ptr()->flags_ = value; }
 
-  void SetLength(intptr_t value) {
+  void SetLength(intptr_t value) const {
     // This is only safe because we create a new Smi, which does not cause
     // heap allocation.
     raw_ptr()->data_length_ = Smi::New(value);
@@ -3942,7 +4819,12 @@ RawClass* Object::clazz() const {
   if ((raw_value & kSmiTagMask) == kSmiTag) {
     return Smi::Class();
   }
-  return raw_->ptr()->class_;
+  RawClass* result = raw_->ptr()->class_;
+  ASSERT(result->ptr()->index_ ==
+      RawObject::ClassTag::decode(raw_->ptr()->tags_));
+  ASSERT(Isolate::Current()->class_table()->At(
+      RawObject::ClassTag::decode(raw_->ptr()->tags_)) == result);
+  return result;
 }
 
 

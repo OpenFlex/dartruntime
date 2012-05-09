@@ -21,27 +21,36 @@
 
 namespace dart {
 
+DEFINE_FLAG(bool, print_scopes, false, "Print scopes of local variables.");
+DEFINE_FLAG(bool, trace_functions, false, "Trace entry of each function.");
 DECLARE_FLAG(bool, enable_type_checks);
 DECLARE_FLAG(bool, intrinsify);
 DECLARE_FLAG(bool, optimization_counter_threshold);
 DECLARE_FLAG(bool, print_ast);
-DECLARE_FLAG(bool, print_scopes);
 DECLARE_FLAG(bool, report_usage_count);
-DECLARE_FLAG(bool, trace_functions);
 
 
 FlowGraphCompiler::FlowGraphCompiler(
     Assembler* assembler,
     const ParsedFunction& parsed_function,
-    const GrowableArray<BlockEntryInstr*>& block_order)
+    const GrowableArray<BlockEntryInstr*>& block_order,
+    bool is_optimizing)
     : FlowGraphVisitor(block_order),
       assembler_(assembler),
       parsed_function_(parsed_function),
       block_info_(block_order.length()),
       current_block_(NULL),
-      pc_descriptors_list_(new DescriptorList()),
-      exception_handlers_list_(new ExceptionHandlerList()) {
-  for (int i = 0; i < block_order.length(); ++i) {
+      pc_descriptors_list_(NULL),
+      exception_handlers_list_(NULL),
+      is_optimizing_(is_optimizing) {
+}
+
+
+void FlowGraphCompiler::InitCompiler() {
+  pc_descriptors_list_ = new DescriptorList();
+  exception_handlers_list_ = new ExceptionHandlerList();
+  block_info_.Clear();
+  for (int i = 0; i < block_order_.length(); ++i) {
     block_info_.Add(new BlockInfo());
   }
 }
@@ -158,12 +167,8 @@ void FlowGraphCompiler::GenerateInlineInstanceof(const AbstractType& type,
         __ movq(R10, FieldAddress(RAX, Object::class_offset()));
         __ cmpq(R10, RCX);
         __ j(EQUAL, is_instance);
-        // RAX, RCX, and RDX are preserved in stub, result is in RBX.
-        __ call(&StubCode::IsRawSubTypeLabel());
-        // Result in RBX: 1 is raw subtype.
-        __ cmpq(RBX, Immediate(1));
-        __ j(EQUAL, is_instance);
-          // Otherwise fall through to runtime call.
+        // TODO(srdjan): Finish implementation.
+        // Otherwise fall through to runtime call.
       } else {
         // However, for specific core library interfaces, we can check for
         // specific core library classes.
@@ -216,15 +221,7 @@ void FlowGraphCompiler::GenerateInlineInstanceof(const AbstractType& type,
           __ cmpq(RCX, raw_null);
           __ j(NOT_EQUAL, is_instance);
         } else {
-          __ LoadObject(RCX, type_class);
-          // RAX: Instance (preserved).
-          // RCX: test class (preserved).
-          // RDX: instantiator type arguments (preserved).
-          __ call(&StubCode::IsRawSubTypeLabel());
-          // Result in RBX: 1 is raw subtype.
-          __ cmpq(RBX, Immediate(1));
-          __ j(EQUAL, is_instance);
-          // Otherwise fallthrough to runtime call.
+          // TODO(srdjan): Finish implementation.
         }
       }
     }
@@ -267,12 +264,7 @@ void FlowGraphCompiler::GenerateInlineInstanceof(const AbstractType& type,
       // Check that class of type has no type parameters.
       __ cmpq(R10, raw_null);
       __ j(NOT_EQUAL, &runtime_call, Assembler::kNearJump);
-      // We have a non-parameterized class in RCX, compare with class of
-      // value in RAX. RAX, RCX, and RDX are preserved in stub.
-      __ call(&StubCode::IsRawSubTypeLabel());
-      // Result in EBX: 1 is raw subtype.
-      __ cmpq(RBX, Immediate(1));
-      __ j(EQUAL, is_instance);
+      // TODO(srdjan): Implement subtype test cache.
       // Fall through to runtime call.
     }
   }
@@ -292,7 +284,7 @@ void FlowGraphCompiler::GenerateInlineInstanceof(const AbstractType& type,
 // - object in RAX for successful assignable check (or throws TypeError).
 // Performance notes: positive checks must be quick, negative checks can be slow
 // as they throw an exception.
-void FlowGraphCompiler::GenerateAssertAssignable(intptr_t node_id,
+void FlowGraphCompiler::GenerateAssertAssignable(intptr_t cid,
                                                  intptr_t token_index,
                                                  intptr_t try_index,
                                                  const AbstractType& dst_type,
@@ -318,13 +310,11 @@ void FlowGraphCompiler::GenerateAssertAssignable(intptr_t node_id,
     const String& error_message = String::ZoneHandle(
         String::NewSymbol(error.ToErrorCString()));
     __ PushObject(Object::ZoneHandle());  // Make room for the result.
-    const Immediate location =
-        Immediate(reinterpret_cast<int64_t>(Smi::New(token_index)));
-    __ pushq(location);  // Push the source location.
+    __ pushq(Immediate(Smi::RawValue(token_index)));  // Source location.
     __ pushq(RAX);  // Push the source object.
     __ PushObject(dst_name);  // Push the name of the destination.
     __ PushObject(error_message);
-    GenerateCallRuntime(node_id,
+    GenerateCallRuntime(cid,
                         token_index,
                         try_index,
                         kMalformedTypeErrorRuntimeEntry);
@@ -340,27 +330,25 @@ void FlowGraphCompiler::GenerateAssertAssignable(intptr_t node_id,
 
   __ Bind(&runtime_call);
   __ PushObject(Object::ZoneHandle());  // Make room for the result.
-  const Immediate location =
-      Immediate(reinterpret_cast<int64_t>(Smi::New(token_index)));
-  const Immediate node_id_as_smi =
-      Immediate(reinterpret_cast<int64_t>(Smi::New(node_id)));
-  __ pushq(location);  // Push the source location.
-  __ pushq(node_id_as_smi);  // node-id.
+  __ pushq(Immediate(Smi::RawValue(token_index)));  // Source location.
+  __ pushq(Immediate(Smi::RawValue(cid)));  // Computation id.
   __ pushq(RAX);  // Push the source object.
   __ PushObject(dst_type);  // Push the type of the destination.
-  if (!dst_type.IsInstantiated()) {
-    __ pushq(RDX);  // Instantiator type arguments.
+  __ pushq(raw_null);  // TODO(srdjan): Instantiator.
+  if (dst_type.IsInstantiated()) {
+    __ pushq(raw_null);  // Null instantiator type arguments.
   } else {
-    __ pushq(raw_null);  // Null instantiator.
+    __ pushq(RDX);  // Instantiator type arguments.
   }
   __ PushObject(dst_name);  // Push the name of the destination.
-  GenerateCallRuntime(node_id,
+  __ pushq(raw_null);  // SubtypeTestCache not yet supported.
+  GenerateCallRuntime(cid,
                       token_index,
                       try_index,
                       kTypeCheckRuntimeEntry);
   // Pop the parameters supplied to the runtime entry. The result of the
   // type check runtime call is the checked value.
-  __ addq(RSP, Immediate(6 * kWordSize));
+  __ addq(RSP, Immediate(8 * kWordSize));
   __ popq(RAX);
 
   __ Bind(&is_assignable);
@@ -403,7 +391,7 @@ void FlowGraphCompiler::VisitAssertAssignable(AssertAssignableComp* comp) {
     __ popq(RDX);
   }
   LoadValue(RAX, comp->value());
-  GenerateAssertAssignable(comp->node_id(),
+  GenerateAssertAssignable(comp->cid(),
                            comp->token_index(),
                            comp->try_index(),
                            comp->dst_type(),
@@ -421,11 +409,9 @@ void FlowGraphCompiler::VisitAssertBoolean(AssertBooleanComp* comp) {
   __ CompareObject(RAX, Bool::ZoneHandle(Bool::False()));
   __ j(EQUAL, &done, Assembler::kNearJump);
 
-  const Immediate location =
-      Immediate(reinterpret_cast<int64_t>(Smi::New(comp->token_index())));
-  __ pushq(location);  // Push the source location.
+  __ pushq(Immediate(Smi::RawValue(comp->token_index())));  // Source location.
   __ pushq(RAX);  // Push the source object.
-  GenerateCallRuntime(comp->node_id(),
+  GenerateCallRuntime(comp->cid(),
                       comp->token_index(),
                       comp->try_index(),
                       kConditionTypeErrorRuntimeEntry);
@@ -468,7 +454,7 @@ static bool VerifyValues(Value* v1, Value* v2) {
 }
 
 
-void FlowGraphCompiler::EmitInstanceCall(intptr_t node_id,
+void FlowGraphCompiler::EmitInstanceCall(intptr_t cid,
                                          intptr_t token_index,
                                          intptr_t try_index,
                                          const String& function_name,
@@ -478,7 +464,7 @@ void FlowGraphCompiler::EmitInstanceCall(intptr_t node_id,
   ICData& ic_data =
       ICData::ZoneHandle(ICData::New(parsed_function_.function(),
                                      function_name,
-                                     node_id,
+                                     cid,
                                      checked_argument_count));
   const Array& arguments_descriptor =
       CodeGenerator::ArgumentsDescriptor(argument_count, argument_names);
@@ -498,7 +484,7 @@ void FlowGraphCompiler::EmitInstanceCall(intptr_t node_id,
   }
   ExternalLabel target_label("InlineCache", label_address);
   __ call(&target_label);
-  AddCurrentDescriptor(PcDescriptors::kIcCall, node_id, token_index, try_index);
+  AddCurrentDescriptor(PcDescriptors::kIcCall, cid, token_index, try_index);
   __ addq(RSP, Immediate(argument_count * kWordSize));
 }
 
@@ -554,7 +540,7 @@ void FlowGraphCompiler::VisitClosureCall(ClosureCallComp* comp) {
 
 void FlowGraphCompiler::VisitInstanceCall(InstanceCallComp* comp) {
   ASSERT(VerifyCallComputation(comp));
-  EmitInstanceCall(comp->node_id(),
+  EmitInstanceCall(comp->cid(),
                    comp->token_index(),
                    comp->try_index(),
                    comp->function_name(),
@@ -611,7 +597,7 @@ void FlowGraphCompiler::VisitEqualityCompare(EqualityCompareComp* comp) {
   const Array& kNoArgumentNames = Array::Handle();
   const int kNumArgumentsChecked = 1;
 
-  EmitInstanceCall(comp->node_id(),
+  EmitInstanceCall(comp->cid(),
                    comp->token_index(),
                    comp->try_index(),
                    operator_name,
@@ -738,7 +724,7 @@ void FlowGraphCompiler::VisitStoreIndexed(StoreIndexedComp* comp) {
   __ pushq(RCX);
   __ pushq(RBX);
   __ pushq(RAX);
-  EmitInstanceCall(comp->node_id(),
+  EmitInstanceCall(comp->cid(),
                    comp->token_index(),
                    comp->try_index(),
                    function_name,
@@ -761,7 +747,7 @@ void FlowGraphCompiler::VisitInstanceSetter(InstanceSetterComp* comp) {
   __ pushq(RAX);
   __ pushq(RBX);
   __ pushq(RAX);
-  EmitInstanceCall(comp->node_id(),
+  EmitInstanceCall(comp->cid(),
                    comp->token_index(),
                    comp->try_index(),
                    function_name,
@@ -811,7 +797,7 @@ void FlowGraphCompiler::VisitBooleanNegate(BooleanNegateComp* comp) {
 // Destroys RCX and RDX.
 // Returns:
 // - true or false in RAX.
-void FlowGraphCompiler::GenerateInstanceOf(intptr_t node_id,
+void FlowGraphCompiler::GenerateInstanceOf(intptr_t cid,
                                            intptr_t token_index,
                                            intptr_t try_index,
                                            const AbstractType& type,
@@ -842,23 +828,21 @@ void FlowGraphCompiler::GenerateInstanceOf(intptr_t node_id,
 
   // Generate runtime call.
   __ PushObject(Object::ZoneHandle());  // Make room for the result.
-  const Immediate location =
-      Immediate(reinterpret_cast<int64_t>(Smi::New(token_index)));
-  const Immediate node_id_as_smi =
-      Immediate(reinterpret_cast<int64_t>(Smi::New(node_id)));
-  __ pushq(location);  // Push the source location.
-  __ pushq(node_id_as_smi);
+  __ pushq(Immediate(Smi::RawValue(token_index)));  // Source location.
+  __ pushq(Immediate(Smi::RawValue(cid)));  // Computation id.
   __ pushq(RAX);  // Push the instance.
   __ PushObject(type);  // Push the type.
-  if (!type.IsInstantiated()) {
-    __ pushq(RDX);  // Instantiator type arguments.
+  __ pushq(raw_null);  // TODO(srdjan): Pass instantiator instead of null.
+  if (type.IsInstantiated()) {
+    __ pushq(raw_null);  // Null instantiator type arguments.
   } else {
-    __ pushq(raw_null);  // Null instantiator.
+    __ pushq(RDX);  // Instantiator type arguments.
   }
-  GenerateCallRuntime(node_id, token_index, try_index, kInstanceofRuntimeEntry);
+  __ pushq(raw_null);  // SubtypeTestCache not yet supported.
+  GenerateCallRuntime(cid, token_index, try_index, kInstanceofRuntimeEntry);
   // Pop the two parameters supplied to the runtime entry. The result of the
   // instanceof runtime call will be left as the result of the operation.
-  __ addq(RSP, Immediate(5 * kWordSize));
+  __ addq(RSP, Immediate(7 * kWordSize));
   Label done;
   if (negate_result) {
     __ popq(RDX);
@@ -886,7 +870,7 @@ void FlowGraphCompiler::VisitInstanceOf(InstanceOfComp* comp) {
     __ popq(RDX);
   }
   LoadValue(RAX, comp->value());
-  GenerateInstanceOf(comp->node_id(),
+  GenerateInstanceOf(comp->cid(),
                      comp->token_index(),
                      comp->try_index(),
                      comp->type(),
@@ -906,12 +890,34 @@ void FlowGraphCompiler::VisitAllocateObject(AllocateObjectComp* comp) {
 }
 
 
+void FlowGraphCompiler::VisitAllocateObjectWithBoundsCheck(
+    AllocateObjectWithBoundsCheckComp* comp) {
+  const Class& cls = Class::ZoneHandle(comp->constructor().owner());
+  __ popq(RCX);  // Pop instantiator type arguments.
+  __ popq(RAX);  // Pop type arguments.
+
+  // Push the result place holder initialized to NULL.
+  __ PushObject(Object::ZoneHandle());
+  __ pushq(Immediate(Smi::RawValue(comp->token_index())));
+  __ PushObject(cls);
+  __ pushq(RAX);  // Push type arguments.
+  __ pushq(RCX);  // Push instantiator type arguments.
+  GenerateCallRuntime(comp->cid(),
+                      comp->token_index(),
+                      comp->try_index(),
+                      kAllocateObjectWithBoundsCheckRuntimeEntry);
+  __ popq(RCX);  // Pop instantiator type arguments.
+  __ popq(RCX);  // Pop type arguments.
+  __ popq(RCX);  // Pop class.
+  __ popq(RCX);  // Pop source location.
+  __ popq(RAX);  // Pop new instance.
+}
+
+
 void FlowGraphCompiler::VisitCreateArray(CreateArrayComp* comp) {
   // 1. Allocate the array.  R10 = length, RBX = element type.
   __ movq(R10, Immediate(Smi::RawValue(comp->ElementCount())));
-  const AbstractTypeArguments& element_type = comp->type_arguments();
-  ASSERT(element_type.IsNull() || element_type.IsInstantiated());
-  __ LoadObject(RBX, element_type);
+  LoadValue(RBX, comp->element_type());
   GenerateCall(comp->token_index(),
                comp->try_index(),
                &StubCode::AllocateArrayLabel(),
@@ -954,8 +960,8 @@ void FlowGraphCompiler::VisitNativeLoadField(NativeLoadFieldComp* comp) {
 }
 
 
-void FlowGraphCompiler::VisitExtractFactoryTypeArguments(
-    ExtractFactoryTypeArgumentsComp* comp) {
+void FlowGraphCompiler::VisitInstantiateTypeArguments(
+    InstantiateTypeArgumentsComp* comp) {
   __ popq(RAX);  // Instantiator.
 
   // RAX is the instantiator AbstractTypeArguments object (or null).
@@ -980,19 +986,18 @@ void FlowGraphCompiler::VisitExtractFactoryTypeArguments(
     __ LoadObject(RCX, Class::ZoneHandle(Object::type_arguments_class()));
     __ cmpq(RCX, FieldAddress(RAX, Object::class_offset()));
     __ j(NOT_EQUAL, &type_arguments_uninstantiated, Assembler::kNearJump);
-    Immediate arguments_length = Immediate(reinterpret_cast<int64_t>(
-        Smi::New(comp->type_arguments().Length())));
+    Immediate arguments_length =
+        Immediate(Smi::RawValue(comp->type_arguments().Length()));
     __ cmpq(FieldAddress(RAX, TypeArguments::length_offset()),
         arguments_length);
     __ j(EQUAL, &type_arguments_instantiated, Assembler::kNearJump);
     __ Bind(&type_arguments_uninstantiated);
   }
-  // A runtime call to instantiate the type arguments is required before
-  // calling the factory.
+  // A runtime call to instantiate the type arguments is required.
   __ PushObject(Object::ZoneHandle());  // Make room for the result.
   __ PushObject(comp->type_arguments());
   __ pushq(RAX);  // Push instantiator type arguments.
-  GenerateCallRuntime(comp->node_id(),
+  GenerateCallRuntime(comp->cid(),
                       comp->token_index(),
                       comp->try_index(),
                       kInstantiateTypeArgumentsRuntimeEntry);
@@ -1030,8 +1035,8 @@ void FlowGraphCompiler::VisitExtractConstructorTypeArguments(
     __ LoadObject(RCX, Class::ZoneHandle(Object::type_arguments_class()));
     __ cmpq(RCX, FieldAddress(RAX, Object::class_offset()));
     __ j(NOT_EQUAL, &type_arguments_uninstantiated, Assembler::kNearJump);
-    Immediate arguments_length = Immediate(reinterpret_cast<int64_t>(
-        Smi::New(comp->type_arguments().Length())));
+    Immediate arguments_length =
+        Immediate(Smi::RawValue(comp->type_arguments().Length()));
     __ cmpq(FieldAddress(RAX, TypeArguments::length_offset()),
         arguments_length);
     __ j(EQUAL, &type_arguments_instantiated, Assembler::kNearJump);
@@ -1076,8 +1081,6 @@ void FlowGraphCompiler::VisitExtractConstructorInstantiator(
     // is split between two computations, so that each one produces a
     // single value, rather than producing a pair of values.
     // If this becomes an issue, we should expose these tests at the IL level.
-    // TODO(regis): This code will still change, because bounds checking is not
-    // implemented yet.
 
     // Check if the instantiator type argument vector is a TypeArguments of a
     // matching length and, if so, use it as the instantiated type_arguments.
@@ -1086,8 +1089,8 @@ void FlowGraphCompiler::VisitExtractConstructorInstantiator(
     __ LoadObject(RCX, Class::ZoneHandle(Object::type_arguments_class()));
     __ cmpq(RCX, FieldAddress(RAX, Object::class_offset()));
     __ j(NOT_EQUAL, &done, Assembler::kNearJump);
-    Immediate arguments_length = Immediate(reinterpret_cast<int64_t>(
-        Smi::New(comp->type_arguments().Length())));
+    Immediate arguments_length =
+        Immediate(Smi::RawValue(comp->type_arguments().Length()));
     __ cmpq(FieldAddress(RAX, TypeArguments::length_offset()),
         arguments_length);
     __ j(NOT_EQUAL, &done, Assembler::kNearJump);
@@ -1124,7 +1127,7 @@ void FlowGraphCompiler::VisitCloneContext(CloneContextComp* comp) {
   __ popq(RAX);  // Get context value from stack.
   __ PushObject(Object::ZoneHandle());  // Make room for the result.
   __ pushq(RAX);
-  GenerateCallRuntime(comp->node_id(),
+  GenerateCallRuntime(comp->cid(),
                       comp->token_index(),
                       comp->try_index(),
                       kCloneContextRuntimeEntry);
@@ -1140,8 +1143,11 @@ void FlowGraphCompiler::VisitCatchEntry(CatchEntryComp* comp) {
   // popping arguments has not been run.
   const intptr_t locals_space_size = StackSize() * kWordSize;
   ASSERT(locals_space_size >= 0);
-  __ movq(RSP, RBP);
-  __ subq(RSP, Immediate(locals_space_size));
+  if (locals_space_size == 0) {
+    __ movq(RSP, RBP);
+  } else {
+    __ leaq(RSP, Address(RBP, -locals_space_size));
+  }
 
   ASSERT(!comp->exception_var().is_captured());
   ASSERT(!comp->stacktrace_var().is_captured());
@@ -1225,17 +1231,28 @@ void FlowGraphCompiler::VisitBind(BindInstr* instr) {
 
 void FlowGraphCompiler::VisitReturn(ReturnInstr* instr) {
   LoadValue(RAX, instr->value());
-
-#ifdef DEBUG
-  // Check that the entry stack size matches the exit stack size.
-  __ movq(R10, RBP);
-  __ subq(R10, RSP);
-  __ cmpq(R10, Immediate(StackSize() * kWordSize));
-  Label stack_ok;
-  __ j(EQUAL, &stack_ok, Assembler::kNearJump);
-  __ Stop("Exit stack size does not match the entry stack size.");
-  __ Bind(&stack_ok);
-#endif  // DEBUG.
+  if (!is_optimizing()) {
+    // Count only in unoptimized code.
+    // TODO(srdjan): Replace the counting code with a type feedback
+    // collection and counting stub.
+    const Function& function =
+          Function::ZoneHandle(parsed_function_.function().raw());
+    __ LoadObject(RCX, function);
+    __ incq(FieldAddress(RCX, Function::usage_counter_offset()));
+    if (CodeGenerator::CanOptimize()) {
+      // Do not optimize if usage count must be reported.
+      __ cmpl(FieldAddress(RCX, Function::usage_counter_offset()),
+          Immediate(FLAG_optimization_counter_threshold));
+      Label not_yet_hot;
+      __ j(LESS_EQUAL, &not_yet_hot, Assembler::kNearJump);
+      __ pushq(RAX);  // Preserve result.
+      __ pushq(RCX);  // Argument for runtime: function to optimize.
+      __ CallRuntime(kOptimizeInvokedFunctionRuntimeEntry);
+      __ popq(RCX);  // Remove argument.
+      __ popq(RAX);  // Restore result.
+      __ Bind(&not_yet_hot);
+    }
+  }
 
   if (FLAG_trace_functions) {
     __ pushq(RAX);  // Preserve result.
@@ -1264,7 +1281,7 @@ void FlowGraphCompiler::VisitReturn(ReturnInstr* instr) {
   __ nop(1);
   __ nop(1);
   AddCurrentDescriptor(PcDescriptors::kReturn,
-                       instr->node_id(),
+                       instr->cid(),
                        instr->token_index(),
                        CatchClauseNode::kInvalidTryIndex);  // try-index.
 }
@@ -1273,7 +1290,7 @@ void FlowGraphCompiler::VisitReturn(ReturnInstr* instr) {
 void FlowGraphCompiler::VisitThrow(ThrowInstr* instr) {
   LoadValue(RAX, instr->exception());
   __ pushq(RAX);
-  GenerateCallRuntime(instr->node_id(),
+  GenerateCallRuntime(instr->cid(),
                       instr->token_index(),
                       instr->try_index(),
                       kThrowRuntimeEntry);
@@ -1286,7 +1303,7 @@ void FlowGraphCompiler::VisitReThrow(ReThrowInstr* instr) {
   __ pushq(RAX);
   LoadValue(RAX, instr->stack_trace());
   __ pushq(RAX);
-  GenerateCallRuntime(instr->node_id(),
+  GenerateCallRuntime(instr->cid(),
                       instr->token_index(),
                       instr->try_index(),
                       kReThrowRuntimeEntry);
@@ -1571,7 +1588,7 @@ bool FlowGraphCompiler::TryIntrinsify() {
 // TODO(srdjan): Investigate where to put the argument type checks for
 // checked mode.
 void FlowGraphCompiler::CompileGraph() {
-  TimerScope timer(FLAG_compiler_stats, &CompilerStats::graphcompiler_timer);
+  InitCompiler();
   if (TryIntrinsify()) {
     // Make it patchable: code must have a minimum code size, nop(2) increases
     // the minimum code size appropriately.
@@ -1674,23 +1691,23 @@ void FlowGraphCompiler::GenerateCall(intptr_t token_index,
 }
 
 
-void FlowGraphCompiler::GenerateCallRuntime(intptr_t node_id,
+void FlowGraphCompiler::GenerateCallRuntime(intptr_t cid,
                                             intptr_t token_index,
                                             intptr_t try_index,
                                             const RuntimeEntry& entry) {
   __ CallRuntime(entry);
-  AddCurrentDescriptor(PcDescriptors::kOther, node_id, token_index, try_index);
+  AddCurrentDescriptor(PcDescriptors::kOther, cid, token_index, try_index);
 }
 
 
 // Uses current pc position and try-index.
 void FlowGraphCompiler::AddCurrentDescriptor(PcDescriptors::Kind kind,
-                                             intptr_t node_id,
+                                             intptr_t cid,
                                              intptr_t token_index,
                                              intptr_t try_index) {
   pc_descriptors_list_->AddDescriptor(kind,
                                       assembler_->CodeSize(),
-                                      node_id,
+                                      cid,
                                       token_index,
                                       try_index);
 }

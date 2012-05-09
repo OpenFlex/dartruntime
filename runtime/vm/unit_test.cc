@@ -6,13 +6,14 @@
 
 #include "vm/unit_test.h"
 
+#include "bin/builtin.h"
+#include "bin/dartutils.h"
+
 #include "vm/assembler.h"
 #include "vm/ast_printer.h"
-#include "vm/code_generator.h"
 #include "vm/compiler.h"
 #include "vm/dart_api_impl.h"
 #include "vm/disassembler.h"
-#include "vm/longjump.h"
 #include "vm/parser.h"
 #include "vm/virtual_memory.h"
 
@@ -60,25 +61,50 @@ static Dart_Handle LibraryTagHandler(Dart_LibraryTag tag,
   if (Dart_IsError(result)) {
     return Dart_Error("accessing url characters failed");
   }
-  static const char* kDartScheme = "dart:";
-  static const intptr_t kDartSchemeLen = strlen(kDartScheme);
-  // If the URL starts with "dart:" then it is not modified as it will be
-  // handled by the VM internally.
-  if (strncmp(url_chars, kDartScheme, kDartSchemeLen) == 0) {
-    if (tag == kCanonicalizeUrl) {
+  bool is_dart_scheme_url = DartUtils::IsDartSchemeURL(url_chars);
+  if (tag == kCanonicalizeUrl) {
+    // If this is a Dart Scheme URL then it is not modified as it will be
+    // handled by the VM internally.
+    if (is_dart_scheme_url) {
       return url;
     }
-    return Dart_Error("unexpected tag encountered %d", tag);
+    Dart_Handle builtin_lib = Builtin::LoadLibrary(Builtin::kBuiltinLibrary);
+    DART_CHECK_VALID(builtin_lib);
+    return DartUtils::CanonicalizeURL(NULL, library, url_chars);
   }
-  return Dart_Error("unsupported url encountered %s", url_chars);
+  if (is_dart_scheme_url) {
+    ASSERT(tag == kImportTag);
+    // Handle imports of other built-in libraries present in the SDK.
+    if (DartUtils::IsDartIOLibURL(url_chars)) {
+      return Builtin::LoadLibrary(Builtin::kIOLibrary);
+    } else if (DartUtils::IsDartJsonLibURL(url_chars)) {
+      return Builtin::LoadLibrary(Builtin::kJsonLibrary);
+    } else if (DartUtils::IsDartUriLibURL(url_chars)) {
+      return Builtin::LoadLibrary(Builtin::kUriLibrary);
+    } else if (DartUtils::IsDartUtfLibURL(url_chars)) {
+      return Builtin::LoadLibrary(Builtin::kUtfLibrary);
+    } else {
+      return Dart_Error("Do not know how to load '%s'", url_chars);
+    }
+  }
+  result = DartUtils::LoadSource(NULL,
+                                 library,
+                                 url,
+                                 tag,
+                                 url_chars,
+                                 import_map);
+  if (!Dart_IsError(result) && (tag == kImportTag)) {
+    Builtin::ImportLibrary(result, Builtin::kBuiltinLibrary);
+  }
+  return result;
 }
 
 
 Dart_Handle TestCase::LoadTestScript(const char* script,
-                                     Dart_NativeEntryResolver resolver) {
+                                     Dart_NativeEntryResolver resolver,
+                                     Dart_Handle import_map) {
   Dart_Handle url = Dart_NewString(TestCase::url());
   Dart_Handle source = Dart_NewString(script);
-  Dart_Handle import_map = Dart_NewList(0);
   Dart_Handle lib = Dart_LoadScript(url, source, LibraryTagHandler, import_map);
   DART_CHECK_VALID(lib);
   Dart_Handle result = Dart_SetNativeResolver(lib, resolver);
@@ -108,7 +134,10 @@ Dart_Handle TestCase::library_handler(Dart_LibraryTag tag,
 
 
 uword AssemblerTest::Assemble() {
-  const Code& code = Code::Handle(Code::FinalizeCode(name_, assembler_));
+  const String& function_name = String::ZoneHandle(String::NewSymbol(name_));
+  Function& function = Function::ZoneHandle(
+      Function::New(function_name, RawFunction::kFunction, true, false, 0));
+  const Code& code = Code::Handle(Code::FinalizeCode(function, assembler_));
   if (FLAG_disassemble) {
     OS::Print("Code for test '%s' {\n", name_);
     const Instructions& instructions =
@@ -146,39 +175,14 @@ CodeGenTest::CodeGenTest(const char* name)
 
 
 void CodeGenTest::Compile() {
-  Assembler assembler;
   ParsedFunction parsed_function(function_);
   parsed_function.SetNodeSequence(node_sequence_);
   parsed_function.set_instantiator(NULL);
   parsed_function.set_default_parameter_values(default_parameter_values_);
   parsed_function.AllocateVariables();
-  bool retval;
-  Isolate* isolate = Isolate::Current();
-  EXPECT(isolate != NULL);
-  LongJump* base = isolate->long_jump_base();
-  LongJump jump;
-  isolate->set_long_jump_base(&jump);
-  if (setjmp(*jump.Set()) == 0) {
-    CodeGenerator code_gen(&assembler, parsed_function);
-    code_gen.GenerateCode();
-    const char* function_fullname = function_.ToFullyQualifiedCString();
-    const Code& code =
-        Code::Handle(Code::FinalizeCode(function_fullname, &assembler));
-    if (FLAG_disassemble) {
-      OS::Print("Code for function '%s' {\n", function_fullname);
-      const Instructions& instructions =
-          Instructions::Handle(code.instructions());
-      uword start = instructions.EntryPoint();
-      Disassembler::Disassemble(start, start + assembler.CodeSize());
-      OS::Print("}\n");
-    }
-    function_.SetCode(code);
-    retval = true;
-  } else {
-    retval = false;
-  }
-  EXPECT(retval);
-  isolate->set_long_jump_base(base);
+  const Error& error =
+      Error::Handle(Compiler::CompileParsedFunction(parsed_function));
+  EXPECT(error.IsNull());
 }
 
 

@@ -49,7 +49,8 @@ bool Intrinsifier::ObjectArray_Allocate(Assembler* assembler) {
   ASSERT(kSmiTagShift == 1);
   __ andl(EDI, Immediate(-kObjectAlignment));
 
-  Heap* heap = Isolate::Current()->heap();
+  Isolate* isolate = Isolate::Current();
+  Heap* heap = isolate->heap();
 
   // EDI: allocation size.
   __ movl(EAX, Address::Absolute(heap->TopAddress()));
@@ -76,12 +77,16 @@ bool Intrinsifier::ObjectArray_Allocate(Assembler* assembler) {
     __ cmpl(EDI, Immediate(RawObject::SizeTag::kMaxSizeTag));
     __ j(ABOVE, &size_tag_overflow, Assembler::kNearJump);
     __ shll(EDI, Immediate(RawObject::kSizeTagBit - kObjectAlignmentLog2));
-    __ movl(FieldAddress(EAX, Array::tags_offset()), EDI);  // Tags.
     __ jmp(&done, Assembler::kNearJump);
 
     __ Bind(&size_tag_overflow);
-    __ movl(FieldAddress(EAX, Array::tags_offset()), Immediate(0));
+    __ movl(EDI, Immediate(0));
     __ Bind(&done);
+
+    // Get the class index and insert it into the tags.
+    const Class& cls = Class::Handle(isolate->object_store()->array_class());
+    __ orl(EDI, Immediate(RawObject::ClassTag::encode(cls.index())));
+    __ movl(FieldAddress(EAX, Array::tags_offset()), EDI);  // Tags.
   }
 
   // Store class value for array.
@@ -266,7 +271,8 @@ bool Intrinsifier::GArray_Allocate(Assembler* assembler) {
   // RoundedAllocationSize(sizeof(RawGrowableObjectArray)) +
   intptr_t fixed_size = GrowableObjectArray::InstanceSize();
 
-  Heap* heap = Isolate::Current()->heap();
+  Isolate* isolate = Isolate::Current();
+  Heap* heap = isolate->heap();
 
   __ movl(EAX, Address::Absolute(heap->TopAddress()));
   __ leal(EBX, Address(EAX, fixed_size));
@@ -284,8 +290,13 @@ bool Intrinsifier::GArray_Allocate(Assembler* assembler) {
 
   // Initialize the tags.
   // EAX: new growable array object start as a tagged pointer.
+  const Class& cls = Class::Handle(
+      isolate->object_store()->growable_object_array_class());
+  uword tags = 0;
+  tags = RawObject::SizeTag::update(fixed_size, tags);
+  tags = RawObject::ClassTag::update(cls.index(), tags);
   __ movl(FieldAddress(EAX, GrowableObjectArray::tags_offset()),
-          Immediate(RawObject::SizeTag::update(fixed_size, 0)));
+          Immediate(tags));
 
   // Store backing array object in growable array object.
   __ movl(EBX, Address(ESP, kArrayOffset));  // data argument.
@@ -418,50 +429,6 @@ bool Intrinsifier::GrowableArray_setData(Assembler* assembler) {
   __ movl(FieldAddress(EAX, GrowableObjectArray::data_offset()), EBX);
   __ ret();
   return true;
-}
-
-
-// Handles only class InternalByteArray.
-bool Intrinsifier::ByteArrayBase_getLength(Assembler* assembler) {
-  ObjectStore* object_store = Isolate::Current()->object_store();
-  Label fall_through;
-  __ movl(EAX, Address(ESP, + 1 * kWordSize));
-  __ movl(EBX, FieldAddress(EAX, Object::class_offset()));
-  __ CompareObject(EBX,
-      Class::ZoneHandle(object_store->internal_byte_array_class()));
-  __ j(NOT_EQUAL, &fall_through);
-  __ movl(EAX, FieldAddress(EAX, InternalByteArray::length_offset()));
-  __ ret();
-  __ Bind(&fall_through);
-  return false;
-}
-
-
-// Handles only class InternalByteArray.
-bool Intrinsifier::ByteArrayBase_getIndexed(Assembler* assembler) {
-  ObjectStore* object_store = Isolate::Current()->object_store();
-  Label fall_through;
-  __ movl(EAX, Address(ESP, + 2 * kWordSize));  // Array.
-  __ movl(EBX, FieldAddress(EAX, Object::class_offset()));
-  __ CompareObject(EBX,
-      Class::ZoneHandle(object_store->internal_byte_array_class()));
-  __ j(NOT_EQUAL, &fall_through);
-  __ movl(EBX, Address(ESP, + 1 * kWordSize));  // Index.
-  __ testl(EBX, Immediate(kSmiTagMask));
-  __ j(NOT_ZERO, &fall_through, Assembler::kNearJump);  // Non-smi index.
-  // Range check.
-  __ cmpl(EBX, FieldAddress(EAX, InternalByteArray::length_offset()));
-  // Runtime throws exception.
-  __ j(ABOVE_EQUAL, &fall_through, Assembler::kNearJump);
-  __ SmiUntag(EBX);
-  __ movzxb(EAX,
-      FieldAddress(EAX, EBX, TIMES_1, InternalByteArray::data_offset()));
-  // The values stored in the byte array are regular, untagged values,
-  // therefore they need to be tagged.
-  __ SmiTag(EAX);
-  __ ret();
-  __ Bind(&fall_through);
-  return false;
 }
 
 

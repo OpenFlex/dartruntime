@@ -21,6 +21,7 @@ namespace dart {
 DEFINE_FLAG(bool, inline_alloc, true, "Inline allocation of objects.");
 DEFINE_FLAG(bool, use_slow_path, false,
     "Set to true for debugging & verifying the slow paths.");
+DECLARE_FLAG(int, optimization_counter_threshold);
 
 // Input parameters:
 //   RSP : points to return address.
@@ -252,7 +253,6 @@ void StubCode::GenerateCallStaticFunctionStub(Assembler* assembler) {
 // RBX: function object.
 // R10: arguments descriptor array (num_args is first Smi element).
 void StubCode::GenerateFixCallersTargetStub(Assembler* assembler) {
-  __ Untested("FixCallersTarget stub");
   __ EnterFrame(0);
   __ pushq(R10);  // Preserve arguments descriptor array.
   __ pushq(RBX);  // Preserve target function.
@@ -675,12 +675,15 @@ void StubCode::GenerateAllocateArrayStub(Assembler* assembler) {
       __ cmpq(RBX, Immediate(RawObject::SizeTag::kMaxSizeTag));
       __ j(ABOVE, &size_tag_overflow, Assembler::kNearJump);
       __ shlq(RBX, Immediate(RawObject::kSizeTagBit - kObjectAlignmentLog2));
-      __ movq(FieldAddress(RAX, Array::tags_offset()), RBX);
       __ jmp(&done);
 
       __ Bind(&size_tag_overflow);
-      __ movq(FieldAddress(RAX, Array::tags_offset()), Immediate(0));
+      __ movq(RBX, Immediate(0));
       __ Bind(&done);
+
+      // Get the class index and insert it into the tags.
+      __ orq(RBX, Immediate(RawObject::ClassTag::encode(kArray)));
+      __ movq(FieldAddress(RAX, Array::tags_offset()), RBX);
     }
 
     // Initialize all array elements to raw_null.
@@ -996,13 +999,19 @@ void StubCode::GenerateAllocateContextStub(Assembler* assembler) {
       __ cmpq(R13, Immediate(RawObject::SizeTag::kMaxSizeTag));
       __ j(ABOVE, &size_tag_overflow, Assembler::kNearJump);
       __ shlq(R13, Immediate(RawObject::kSizeTagBit - kObjectAlignmentLog2));
-      __ movq(FieldAddress(RAX, Context::tags_offset()), R13);  // Tags.
       __ jmp(&done);
 
       __ Bind(&size_tag_overflow);
       // Set overflow size tag value.
-      __ movq(FieldAddress(RAX, Context::tags_offset()), Immediate(0));
+      __ movq(R13, Immediate(0));
+
       __ Bind(&done);
+      // RAX: new object.
+      // R10: number of context variables.
+      // R13: size and bit tags.
+      __ orq(R13,
+             Immediate(RawObject::ClassTag::encode(context_class.index())));
+      __ movq(FieldAddress(RAX, Context::tags_offset()), R13);  // Tags.
     }
 
     // Setup up number of context variables field.
@@ -1137,12 +1146,15 @@ void StubCode::GenerateAllocationStubForClass(Assembler* assembler,
       __ movq(Address(RCX,
           InstantiatedTypeArguments::instantiator_type_arguments_offset()),
               RDX);
-      __ LoadObject(RDX,
-          Class::ZoneHandle(Object::instantiated_type_arguments_class()));
+      const Class& ita_cls =
+          Class::ZoneHandle(Object::instantiated_type_arguments_class());
+      __ LoadObject(RDX, ita_cls);
       __ movq(Address(RCX, Instance::class_offset()), RDX);  // Set its class.
       // Set the tags.
-      __ movq(Address(RCX, Instance::tags_offset()),
-              Immediate(RawObject::SizeTag::encode(type_args_size)));
+      uword tags = 0;
+      tags = RawObject::SizeTag::update(type_args_size, tags);
+      tags = RawObject::ClassTag::update(ita_cls.index(), tags);
+      __ movq(Address(RCX, Instance::tags_offset()), Immediate(tags));
       // Set the new InstantiatedTypeArguments object (RCX) as the type
       // arguments (RDI) of the new object (RAX).
       __ movq(RDI, RCX);
@@ -1161,8 +1173,11 @@ void StubCode::GenerateAllocationStubForClass(Assembler* assembler,
     __ LoadObject(RDX, cls);  // Load class of object to be allocated.
     __ movq(Address(RAX, Instance::class_offset()), RDX);
     // Set the tags.
-    __ movq(Address(RAX, Instance::tags_offset()),
-            Immediate(RawObject::SizeTag::encode(instance_size)));
+    uword tags = 0;
+    tags = RawObject::SizeTag::update(instance_size, tags);
+    ASSERT(cls.index() != kIllegalObjectKind);
+    tags = RawObject::ClassTag::update(cls.index(), tags);
+    __ movq(Address(RAX, Instance::tags_offset()), Immediate(tags));
 
     // Initialize the remaining words of the object.
     const Immediate raw_null =
@@ -1313,8 +1328,10 @@ void StubCode::GenerateAllocationStubForClosure(Assembler* assembler,
     __ LoadObject(R10, cls);  // Load signature class of closure.
     __ movq(Address(RAX, Closure::class_offset()), R10);
     // Set the tags.
-    __ movq(Address(RAX, Closure::tags_offset()),
-            Immediate(RawObject::SizeTag::encode(closure_size)));
+    uword tags = 0;
+    tags = RawObject::SizeTag::update(closure_size, tags);
+    tags = RawObject::ClassTag::update(cls.index(), tags);
+    __ movq(Address(RAX, Closure::tags_offset()), Immediate(tags));
 
     // Initialize the function field in the object.
     // RAX: new closure object.
@@ -1335,11 +1352,14 @@ void StubCode::GenerateAllocationStubForClosure(Assembler* assembler,
       // Initialize the new context capturing the receiver.
 
       // Set the class field to the Context class.
-      __ LoadObject(R13, Class::ZoneHandle(Object::context_class()));
+      const Class& context_class = Class::ZoneHandle(Object::context_class());
+      __ LoadObject(R13, context_class);
       __ movq(Address(RBX, Context::class_offset()), R13);
       // Set the tags.
-      __ movq(Address(RBX, Context::tags_offset()),
-              Immediate(RawObject::SizeTag::encode(context_size)));
+      uword tags = 0;
+      tags = RawObject::SizeTag::update(context_size, tags);
+      tags = RawObject::ClassTag::update(context_class.index(), tags);
+      __ movq(Address(RBX, Context::tags_offset()), Immediate(tags));
 
       // Set number of variables field to 1 (for captured receiver).
       __ movq(Address(RBX, Context::num_variables_offset()), Immediate(1));
@@ -1497,7 +1517,24 @@ void StubCode::GenerateCallNoSuchMethodFunctionStub(Assembler* assembler) {
 // - Match not found -> jump to IC miss.
 void StubCode::GenerateNArgsCheckInlineCacheStub(Assembler* assembler,
                                                  intptr_t num_args) {
-  // TODO(srdjan): Add usage counter increment and test (see ia32).
+  __ movq(RCX, FieldAddress(RBX, ICData::function_offset()));
+  __ incq(FieldAddress(RCX, Function::usage_counter_offset()));
+  if (CodeGenerator::CanOptimize()) {
+    __ cmpq(FieldAddress(RCX, Function::usage_counter_offset()),
+        Immediate(FLAG_optimization_counter_threshold));
+    Label not_yet_hot;
+    __ j(LESS_EQUAL, &not_yet_hot, Assembler::kNearJump);
+    __ EnterFrame(0);
+    __ pushq(RBX);  // Preserve inline cache data object.
+    __ pushq(R10);  // Preserve arguments array.
+    __ pushq(RCX);  // Argument for runtime: function object.
+    __ CallRuntime(kOptimizeInvokedFunctionRuntimeEntry);
+    __ popq(RCX);  // Remove argument.
+    __ popq(R10);  // Restore arguments array.
+    __ popq(RBX);  // Restore inline cache data object.
+    __ LeaveFrame();
+    __ Bind(&not_yet_hot);
+  }
   ASSERT(num_args > 0);
   // Get receiver (first read number of arguments from argument descriptor array
   // and then access the receiver from the stack).
@@ -1704,88 +1741,16 @@ void StubCode::GenerateBreakpointDynamicStub(Assembler* assembler) {
 }
 
 
-// Check if an instance class is a subtype of class/interface using simple
-// superchain and interface array traversal. Does not take type parameters into
-// account.
-// RAX: instance (preserved)
-// RCX: class/interface to test against (is class of instance a subtype of it).
-//      (preserved).
-// Result in RBX: 1 is subtype, 0 maybe not.
-// Must preserve RDX.
-// Destroys RBX, R13, R10.
-void StubCode::GenerateIsRawSubTypeStub(Assembler* assembler) {
-  const Immediate raw_null =
-      Immediate(reinterpret_cast<intptr_t>(Object::null()));
-  Label test_class, not_found, found, class_loaded_in_R10, smi_value;
-  __ EnterFrame(0);
-  __ testq(RAX, Immediate(kSmiTagMask));
-  __ j(ZERO, &smi_value, Assembler::kNearJump);
-  __ movq(R10, FieldAddress(RAX, Object::class_offset()));
-  __ jmp(&class_loaded_in_R10, Assembler::kNearJump);
-  __ Bind(&smi_value);
-  __ movq(R10, FieldAddress(CTX, Context::isolate_offset()));
-  __ movq(R10, Address(R10, Isolate::object_store_offset()));
-  __ movq(R10, Address(R10, ObjectStore::smi_class_offset()));
-  __ Bind(&class_loaded_in_R10);
-
-  __ movzxb(RBX, FieldAddress(RCX, Class::is_interface_offset()));
-  // Check if we are comparing against class or interface.
-  __ cmpq(RBX, Immediate(0));
-  __ j(EQUAL, &test_class, Assembler::kNearJump);
-
-  // Get interfaces array from instance class.
-  __ movq(RBX, FieldAddress(R10, Class::interfaces_offset()));
-  __ cmpq(RBX, raw_null);
-  __ j(EQUAL, &not_found, Assembler::kNearJump);
-  __ movq(R13, FieldAddress(RBX, Array::length_offset()));
-  // R13: array index.
-  // RBX: interface array.
-  // RCX: interface searched
-  Label array_loop;
-  __ Bind(&array_loop);
-  __ subq(R13, Immediate(Smi::RawValue(1)));
-  // __ cmpq(R13, Immediate(0));
-  __ j(LESS, &not_found, Assembler::kNearJump);
-  // R13 is Smi therefore TIMES_4 instead of TIMES_8.
-  // Get type from array.
-  __ movq(R10, FieldAddress(RBX, R13, TIMES_4, Array::data_offset()));
-  __ movq(R10, FieldAddress(R10, Type::type_class_offset()));
-  __ cmpq(R10, RCX);
-  __ j(EQUAL, &found, Assembler::kNearJump);
-  __ jmp(&array_loop, Assembler::kNearJump);
-
-  __ Bind(&not_found);
-  __ xorq(RBX, RBX);
-  __ LeaveFrame();
-  __ ret();
-
-  __ Bind(&found);
-  __ movq(RBX, Immediate(1));
-  __ LeaveFrame();
-  __ ret();
-
-  __ Bind(&test_class);
-  // RCX: test class.
-  __ cmpq(R10, RCX);
-  __ j(EQUAL, &found, Assembler::kNearJump);
-
-  // Check superclasses using a loop (faster than runtime call).
-  Label super_loop;
-  __ Bind(&super_loop);
-  // R10: class -> super.
-  __ movq(R10, FieldAddress(R10, Class::super_type_offset()));
-  // The supertype of Object is a null object.
-  __ cmpq(R10, raw_null);
-  __ j(EQUAL, &not_found, Assembler::kNearJump);
-  __ movq(R10, FieldAddress(R10, Type::type_class_offset()));
-  __ cmpq(RCX, R10);
-  __ j(NOT_EQUAL, &super_loop, Assembler::kNearJump);
-  __ jmp(&found, Assembler::kNearJump);
+void StubCode::GenerateSubtype1TestCacheStub(Assembler* assembler) {
+  __ Unimplemented("Subtype1TestCache Stub");
 }
 
+void StubCode::GenerateSubtype2TestCacheStub(Assembler* assembler) {
+  __ Unimplemented("Subtype2TestCache Stub");
+}
 
-void StubCode::GenerateSubtypeTestCacheStub(Assembler* assembler) {
-  __ Unimplemented("SubtypeTestCache Stub");
+void StubCode::GenerateSubtype3TestCacheStub(Assembler* assembler) {
+  __ Unimplemented("Subtype3TestCache Stub");
 }
 
 }  // namespace dart

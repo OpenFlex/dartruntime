@@ -131,10 +131,186 @@ static void InstallUnoptimizedCode(const Function& function) {
 }
 
 
+// Return false if bailed out.
+static bool CompileWithNewCompiler(
+    const ParsedFunction& parsed_function, bool optimized) {
+  bool is_compiled = false;
+  Isolate* isolate = Isolate::Current();
+  LongJump* old_base = isolate->long_jump_base();
+  LongJump bailout_jump;
+  isolate->set_long_jump_base(&bailout_jump);
+  if (setjmp(*bailout_jump.Set()) == 0) {
+    GrowableArray<BlockEntryInstr*> block_order;
+    // TimerScope needs an isolate to be properly terminated in case of a
+    // LongJump.
+    {
+      TimerScope timer(FLAG_compiler_stats,
+                       &CompilerStats::graphbuilder_timer,
+                       isolate);
+      CompilerStats::graphbuilder_timer.Start();
+      FlowGraphBuilder graph_builder(parsed_function);
+      graph_builder.BuildGraph(optimized);
+
+      // The non-optimizing compiler compiles blocks in reverse postorder,
+      // because it is a 'natural' order for the human reader of the
+      // generated code.
+      intptr_t length = graph_builder.postorder_block_entries().length();
+      for (intptr_t i = length - 1; i >= 0; --i) {
+        block_order.Add(graph_builder.postorder_block_entries()[i]);
+      }
+
+      if (optimized) {
+        // Transition to optimized code only from unoptimized code ...
+        // for now.
+        ASSERT(parsed_function.function().HasCode());
+        ASSERT(!parsed_function.function().HasOptimizedCode());
+        // Do not use type feedback to optimize a function that was
+        // deoptimized too often.
+        if (parsed_function.function().deoptimization_counter() <
+            FLAG_deoptimization_counter_threshold) {
+          // Extract type feedback etc.
+        }
+      }
+    }
+
+    Assembler assembler;
+    FlowGraphCompiler graph_compiler(&assembler, parsed_function,
+                                     block_order, optimized);
+    {
+      TimerScope timer(FLAG_compiler_stats,
+                       &CompilerStats::graphcompiler_timer,
+                       isolate);
+      graph_compiler.CompileGraph();
+    }
+    {
+      TimerScope timer(FLAG_compiler_stats,
+                       &CompilerStats::codefinalizer_timer,
+                       isolate);
+      const Function& function = parsed_function.function();
+      const Code& code = Code::Handle(Code::FinalizeCode(function, &assembler));
+      code.set_is_optimized(optimized);
+      graph_compiler.FinalizePcDescriptors(code);
+      graph_compiler.FinalizeStackmaps(code);
+      graph_compiler.FinalizeVarDescriptors(code);
+      graph_compiler.FinalizeExceptionHandlers(code);
+      if (optimized) {
+        function.SetCode(code);
+        CodePatcher::PatchEntry(Code::Handle(function.unoptimized_code()));
+        if (FLAG_trace_compiler) {
+          OS::Print("--> patching entry 0x%x\n",
+                    Code::Handle(function.unoptimized_code()).EntryPoint());
+        }
+      } else {
+        function.set_unoptimized_code(code);
+        function.SetCode(code);
+        ASSERT(CodePatcher::CodeIsPatchable(code));
+      }
+    }
+    is_compiled = true;
+  } else {
+    // We bailed out.
+    Error& bailout_error = Error::Handle(
+        isolate->object_store()->sticky_error());
+    isolate->object_store()->clear_sticky_error();
+    if (FLAG_trace_bailout) {
+      OS::Print("%s\n", bailout_error.ToErrorCString());
+    }
+    is_compiled = false;
+  }
+  isolate->set_long_jump_base(old_base);
+  return is_compiled;
+}
+
+
+static void CompileWithOldCompiler(
+    const ParsedFunction& parsed_function, bool optimized) {
+  const Function& function = parsed_function.function();
+  Assembler assembler;
+  if (optimized) {
+    // Transition to optimized code only from unoptimized code ...
+    // for now.
+    ASSERT(function.HasCode());
+    ASSERT(!function.HasOptimizedCode());
+    // Do not use type feedback to optimize a function that was
+    // deoptimized too often.
+    if (parsed_function.function().deoptimization_counter() <
+        FLAG_deoptimization_counter_threshold) {
+      TimerScope timer(FLAG_compiler_stats,
+                       &CompilerStats::graphbuilder_timer);
+      ExtractTypeFeedback(
+          Code::Handle(parsed_function.function().unoptimized_code()),
+          parsed_function.node_sequence());
+    }
+    OptimizingCodeGenerator code_gen(&assembler, parsed_function);
+    {
+      TimerScope timer(FLAG_compiler_stats,
+                       &CompilerStats::graphcompiler_timer);
+      code_gen.GenerateCode();
+    }
+    {
+      TimerScope timer(FLAG_compiler_stats,
+                       &CompilerStats::codefinalizer_timer);
+      Code& code = Code::Handle(Code::FinalizeCode(function, &assembler));
+      code.set_is_optimized(true);
+      code_gen.FinalizePcDescriptors(code);
+      code_gen.FinalizeStackmaps(code);
+      code_gen.FinalizeExceptionHandlers(code);
+      function.SetCode(code);
+      CodePatcher::PatchEntry(Code::Handle(function.unoptimized_code()));
+    }
+    if (FLAG_trace_compiler) {
+      OS::Print("--> patching entry 0x%x\n",
+                Code::Handle(function.unoptimized_code()).EntryPoint());
+    }
+  } else {
+    // Compile unoptimized code.
+    ASSERT(!function.HasCode());
+    // Compiling first time.
+    CodeGenerator code_gen(&assembler, parsed_function);
+    {
+      TimerScope timer(FLAG_compiler_stats,
+                       &CompilerStats::graphcompiler_timer);
+      code_gen.GenerateCode();
+    }
+    {
+      TimerScope timer(FLAG_compiler_stats,
+                       &CompilerStats::codefinalizer_timer);
+      const Code& code = Code::Handle(Code::FinalizeCode(function, &assembler));
+      code.set_is_optimized(false);
+      code_gen.FinalizePcDescriptors(code);
+      code_gen.FinalizeStackmaps(code);
+      code_gen.FinalizeVarDescriptors(code);
+      code_gen.FinalizeExceptionHandlers(code);
+      function.set_unoptimized_code(code);
+      function.SetCode(code);
+      ASSERT(CodePatcher::CodeIsPatchable(code));
+    }
+  }
+}
+
+static void CompileParsedFunctionHelper(
+    const ParsedFunction& parsed_function, bool optimized) {
+  TimerScope timer(FLAG_compiler_stats, &CompilerStats::codegen_timer);
+  bool is_compiled = false;
+  // TODO(srdjan): Remove once the old compiler has been ripped out.
+#if defined(TARGET_ARCH_X64)
+  const bool use_new_compiler = true;
+#else
+  const bool use_new_compiler = FLAG_use_new_compiler;
+#endif
+  if (use_new_compiler) {
+    is_compiled = CompileWithNewCompiler(parsed_function, optimized);
+  }
+
+  if (!is_compiled) {
+    CompileWithOldCompiler(parsed_function, optimized);
+  }
+}
+
+
 static RawError* CompileFunctionHelper(const Function& function,
                                        bool optimized) {
   Isolate* isolate = Isolate::Current();
-  Error& error = Error::Handle();
   LongJump* base = isolate->long_jump_base();
   LongJump jump;
   isolate->set_long_jump_base(&jump);
@@ -147,128 +323,30 @@ static RawError* CompileFunctionHelper(const Function& function,
   if (setjmp(*jump.Set()) == 0) {
     TIMERSCOPE(time_compilation);
     ParsedFunction parsed_function(function);
-    const char* function_fullname = function.ToFullyQualifiedCString();
     if (FLAG_trace_compiler) {
       OS::Print("Compiling %sfunction: '%s' @ token %d\n",
                 (optimized ? "optimized " : ""),
-                function_fullname,
+                function.ToFullyQualifiedCString(),
                 function.token_index());
     }
     Parser::ParseFunction(&parsed_function);
     parsed_function.AllocateVariables();
 
-    TimerScope timer(FLAG_compiler_stats, &CompilerStats::codegen_timer);
-    bool is_compiled = false;
-    if (FLAG_use_new_compiler) {
-      ASSERT(!optimized);
-      LongJump* old_base = isolate->long_jump_base();
-      LongJump bailout_jump;
-      isolate->set_long_jump_base(&bailout_jump);
-      if (setjmp(*bailout_jump.Set()) == 0) {
-        FlowGraphBuilder graph_builder(parsed_function);
-        graph_builder.BuildGraph();
+    CompileParsedFunctionHelper(parsed_function, optimized);
 
-        // The non-optimizing compiler compiles blocks in reverse postorder,
-        // because it is a 'natural' order for the human reader of the
-        // generated code.
-        intptr_t length = graph_builder.postorder_block_entries().length();
-        GrowableArray<BlockEntryInstr*> block_order(length);
-        for (intptr_t i = length - 1; i >= 0; --i) {
-          block_order.Add(graph_builder.postorder_block_entries()[i]);
-        }
-
-        Assembler assembler;
-        FlowGraphCompiler graph_compiler(&assembler, parsed_function,
-                                         block_order);
-        graph_compiler.CompileGraph();
-
-        TimerScope timer(FLAG_compiler_stats,
-                         &CompilerStats::codefinalizer_timer);
-        const Code& code =
-            Code::Handle(Code::FinalizeCode(function_fullname, &assembler));
-        code.set_is_optimized(false);
-        graph_compiler.FinalizePcDescriptors(code);
-        graph_compiler.FinalizeStackmaps(code);
-        graph_compiler.FinalizeVarDescriptors(code);
-        graph_compiler.FinalizeExceptionHandlers(code);
-        function.set_unoptimized_code(code);
-        function.SetCode(code);
-        ASSERT(CodePatcher::CodeIsPatchable(code));
-        is_compiled = true;
-      } else {
-        // We bailed out.
-        Error& bailout_error = Error::Handle(
-            isolate->object_store()->sticky_error());
-        isolate->object_store()->clear_sticky_error();
-        if (FLAG_trace_bailout) {
-          OS::Print("%s\n", bailout_error.ToErrorCString());
-        }
-      }
-      isolate->set_long_jump_base(old_base);
-    }
-
-    if (!is_compiled) {
-      Assembler assembler;
-      if (optimized) {
-        // Transition to optimized code only from unoptimized code ...
-        // for now.
-        ASSERT(function.HasCode());
-        ASSERT(!function.HasOptimizedCode());
-        // Do not use type feedback to optimize a function that was
-        // deoptimized too often.
-        if (parsed_function.function().deoptimization_counter() <
-            FLAG_deoptimization_counter_threshold) {
-          ExtractTypeFeedback(
-              Code::Handle(parsed_function.function().unoptimized_code()),
-              parsed_function.node_sequence());
-        }
-        OptimizingCodeGenerator code_gen(&assembler, parsed_function);
-        code_gen.GenerateCode();
-        TimerScope timer(FLAG_compiler_stats,
-                         &CompilerStats::codefinalizer_timer);
-        Code& code = Code::Handle(
-            Code::FinalizeCode(function_fullname, &assembler));
-        code.set_is_optimized(true);
-        code_gen.FinalizePcDescriptors(code);
-        code_gen.FinalizeStackmaps(code);
-        code_gen.FinalizeExceptionHandlers(code);
-        function.SetCode(code);
-        CodePatcher::PatchEntry(Code::Handle(function.unoptimized_code()));
-        if (FLAG_trace_compiler) {
-          OS::Print("--> patching entry 0x%x\n",
-                    Code::Handle(function.unoptimized_code()).EntryPoint());
-        }
-      } else {
-        // Compile unnoptimized code.
-        ASSERT(!function.HasCode());
-        // Compiling first time.
-        CodeGenerator code_gen(&assembler, parsed_function);
-        code_gen.GenerateCode();
-        TimerScope timer(FLAG_compiler_stats,
-                         &CompilerStats::codefinalizer_timer);
-        const Code& code =
-            Code::Handle(Code::FinalizeCode(function_fullname, &assembler));
-        code.set_is_optimized(false);
-        code_gen.FinalizePcDescriptors(code);
-        code_gen.FinalizeStackmaps(code);
-        code_gen.FinalizeVarDescriptors(code);
-        code_gen.FinalizeExceptionHandlers(code);
-        function.set_unoptimized_code(code);
-        function.SetCode(code);
-        ASSERT(CodePatcher::CodeIsPatchable(code));
-      }
-    }
     if (FLAG_trace_compiler) {
       OS::Print("--> '%s' entry: 0x%x\n",
-                function_fullname,
+                function.ToFullyQualifiedCString(),
                 Code::Handle(function.CurrentCode()).EntryPoint());
     }
     if (Isolate::Current()->debugger()->IsActive()) {
       Isolate::Current()->debugger()->NotifyCompilation(function);
     }
     if (FLAG_disassemble) {
+      const char* function_fullname = function.ToFullyQualifiedCString();
       OS::Print("Code for %sfunction '%s' {\n",
-                optimized ? "optimized " : "", function_fullname);
+                optimized ? "optimized " : "",
+                function_fullname);
       const Code& code = Code::Handle(function.CurrentCode());
       const Instructions& instructions =
           Instructions::Handle(code.instructions());
@@ -312,13 +390,18 @@ static RawError* CompileFunctionHelper(const Function& function,
       OS::Print("%s", handlers.ToCString());
       OS::Print("}\n");
     }
+    isolate->set_long_jump_base(base);
+    return Error::null();
   } else {
+    Error& error = Error::Handle();
     // We got an error during compilation.
     error = isolate->object_store()->sticky_error();
     isolate->object_store()->clear_sticky_error();
+    isolate->set_long_jump_base(base);
+    return error.raw();
   }
-  isolate->set_long_jump_base(base);
-  return error.raw();
+  UNREACHABLE();
+  return Error::null();
 }
 
 
@@ -329,6 +412,29 @@ RawError* Compiler::CompileFunction(const Function& function) {
 
 RawError* Compiler::CompileOptimizedFunction(const Function& function) {
   return CompileFunctionHelper(function, true);  // Optimized.
+}
+
+
+RawError* Compiler::CompileParsedFunction(
+    const ParsedFunction& parsed_function) {
+  Isolate* isolate = Isolate::Current();
+  LongJump* base = isolate->long_jump_base();
+  LongJump jump;
+  isolate->set_long_jump_base(&jump);
+  if (setjmp(*jump.Set()) == 0) {
+    CompileParsedFunctionHelper(parsed_function, false);  // Non-optimized.
+    isolate->set_long_jump_base(base);
+    return Error::null();
+  } else {
+    Error& error = Error::Handle();
+    // We got an error during compilation.
+    error = isolate->object_store()->sticky_error();
+    isolate->object_store()->clear_sticky_error();
+    isolate->set_long_jump_base(base);
+    return error.raw();
+  }
+  UNREACHABLE();
+  return Error::null();
 }
 
 
@@ -352,7 +458,6 @@ RawError* Compiler::CompileAllFunctions(const Class& cls) {
 
 RawObject* Compiler::ExecuteOnce(SequenceNode* fragment) {
   Isolate* isolate = Isolate::Current();
-  Object& result = Object::Handle();
   LongJump* base = isolate->long_jump_base();
   LongJump jump;
   isolate->set_long_jump_base(&jump);
@@ -387,27 +492,25 @@ RawObject* Compiler::ExecuteOnce(SequenceNode* fragment) {
     parsed_function.SetNodeSequence(fragment);
     parsed_function.set_default_parameter_values(Array::Handle());
 
-    Assembler assembler;
-    CodeGenerator code_gen(&assembler, parsed_function);
-    code_gen.GenerateCode();
-    const Code& code = Code::Handle(Code::FinalizeCode(kEvalConst, &assembler));
-
-    func.SetCode(code);
-    code_gen.FinalizePcDescriptors(code);
-    code_gen.FinalizeStackmaps(code);
-    code_gen.FinalizeExceptionHandlers(code);
+    CompileParsedFunctionHelper(parsed_function, false);  // Non-optimized.
 
     GrowableArray<const Object*> arguments;  // no arguments.
     const Array& kNoArgumentNames = Array::Handle();
+    Object& result = Object::Handle();
     result = DartEntry::InvokeStatic(func,
                                      arguments,
                                      kNoArgumentNames);
+    isolate->set_long_jump_base(base);
+    return result.raw();
   } else {
+    Object& result = Object::Handle();
     result = isolate->object_store()->sticky_error();
     isolate->object_store()->clear_sticky_error();
+    isolate->set_long_jump_base(base);
+    return result.raw();
   }
-  isolate->set_long_jump_base(base);
-  return result.raw();
+  UNREACHABLE();
+  return Object::null();
 }
 
 

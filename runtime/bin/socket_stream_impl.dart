@@ -18,7 +18,7 @@ class _SocketInputStream implements SocketInputStream {
         bytesToRead = len;
       }
     }
-    ByteArray buffer = new ByteArray(bytesToRead);
+    List<int> buffer = new Uint8List(bytesToRead);
     int bytesRead = _socket.readList(buffer, 0, bytesToRead);
     if (bytesRead == 0) {
       // On MacOS when reading from a tty Ctrl-D will result in one
@@ -27,7 +27,7 @@ class _SocketInputStream implements SocketInputStream {
       // which is indicated by a null return value.
       return null;
     } else if (bytesRead < bytesToRead) {
-      ByteArray newBuffer = new ByteArray(bytesRead);
+      List<int> newBuffer = new Uint8List(bytesRead);
       newBuffer.setRange(0, bytesRead, buffer);
       return newBuffer;
     } else {
@@ -109,6 +109,7 @@ class _SocketOutputStream
   }
 
   void close() {
+    if (_closing && _closed) return;
     if (!_pendingWrites.isEmpty()) {
       // Mark the socket for close when all data is written.
       _closing = true;
@@ -117,6 +118,10 @@ class _SocketOutputStream
       // Close the socket for writing.
       _socket._closeWrite();
       _closed = true;
+      // Invoke the callback asynchronously.
+      new Timer(0, (t) {
+        if (_onClosed != null) _onClosed();
+      });
     }
   }
 
@@ -132,6 +137,10 @@ class _SocketOutputStream
     if (_onNoPendingWrites != null) {
       _socket._onWrite = _onWrite;
     }
+  }
+
+  void set onClosed(void callback()) {
+    _onClosed = callback;
   }
 
   bool _write(List<int> buffer, int offset, int len, bool copyBuffer) {
@@ -176,6 +185,9 @@ class _SocketOutputStream
     if (_closing) {
       _socket._closeWrite();
       _closed = true;
+      if (_onClosed != null) {
+        _onClosed();
+      }
     } else {
       if (_onNoPendingWrites != null) _onNoPendingWrites();
     }
@@ -198,7 +210,8 @@ class _SocketOutputStream
 
   Socket _socket;
   _BufferList _pendingWrites;
-  var _onNoPendingWrites;
+  Function _onNoPendingWrites;
+  Function _onClosed;
   bool _closing = false;
   bool _closed = false;
 }

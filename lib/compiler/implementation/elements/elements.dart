@@ -92,6 +92,8 @@ class ElementKind {
     const ElementKind('statement', ElementCategory.NONE);
   static final ElementKind LABEL =
     const ElementKind('label', ElementCategory.NONE);
+  static final ElementKind VOID =
+    const ElementKind('void', ElementCategory.NONE);
 
   toString() => id;
 }
@@ -141,7 +143,7 @@ class Element implements Hashable {
   Token position() => null;
 
   Token findMyName(Token token) {
-    for (Token t = token; t !== EOF_TOKEN; t = t.next) {
+    for (Token t = token; t.kind !== EOF_TOKEN; t = t.next) {
       if (t.value == name) return t;
     }
     return token;
@@ -175,6 +177,13 @@ class Element implements Hashable {
   ClassElement getEnclosingClass() {
     for (Element e = this; e !== null; e = e.enclosingElement) {
       if (e.kind === ElementKind.CLASS) return e;
+    }
+    return null;
+  }
+
+  Element getEnclosingMember() {
+    for (Element e = this; e !== null; e = e.enclosingElement) {
+      if (e.isMember()) return e;
     }
     return null;
   }
@@ -301,8 +310,19 @@ class LibraryElement extends CompilationUnitElement {
     }
   }
 
+  /** Look up a top-level element in this library. The element could
+    * potentially have been imported from another library. Returns
+    * null if no such element exist. */
   Element find(SourceString elementName) {
     return elements[elementName];
+  }
+
+  /** Look up a top-level element in this library, but only look for
+    * non-imported elements. Returns null if no such element exist. */
+  Element findLocal(SourceString elementName) {
+    Element result = elements[elementName];
+    if (result === null || result.getLibrary() != this) return null;
+    return result;
   }
 
   void forEachExport(f(Element element)) {
@@ -334,11 +354,17 @@ class PrefixElement extends Element {
 }
 
 class TypedefElement extends Element {
-  Token token;
+  final Token token;
+  Type cachedType;
+
   TypedefElement(SourceString name, Element enclosing, this.token)
-    : super(name, ElementKind.TYPEDEF, enclosing);
+      : super(name, ElementKind.TYPEDEF, enclosing) {
+    cachedType = new InterfaceType(this);
+  }
 
   position() => findMyName(token);
+
+  Type computeType(Compiler compiler) => cachedType;
 }
 
 class VariableElement extends Element {
@@ -429,7 +455,7 @@ class VariableListElement extends Element {
 
   Type computeType(Compiler compiler) {
     if (type != null) return type;
-    type = getType(parseNode(compiler).type, compiler, getLibrary());
+    type = compiler.resolveTypeAnnotation(this, parseNode(compiler).type);
     return type;
   }
 
@@ -483,56 +509,17 @@ class AbstractFieldElement extends Element {
   }
 }
 
-/** DEPRECATED. */
-Type getType(TypeAnnotation typeAnnotation,
-             Compiler compiler,
-             LibraryElement library) {
-  // TODO(karlklose,ngeoffray): This method should be removed and the
-  // information should be computed by the resolver.
-
-  if (typeAnnotation == null || typeAnnotation.typeName == null) {
-    return compiler.types.dynamicType;
-  }
-  Identifier identifier = typeAnnotation.typeName.asIdentifier();
-  if (identifier === null) {
-    compiler.reportWarning(
-      typeAnnotation.typeName,
-      new ResolutionWarning(MessageKind.GENERIC,
-                            ['library prefixes not handled']));
-    return compiler.types.dynamicType;
-  }
-  SourceString name = identifier.source;
-  Element element = library.find(name);
-  if (element !== null) {
-    if (element.isTypedef()) {
-      // TODO(ngeoffray): This is a hack to help us get support for the
-      // DOM library.
-      // TODO(ngeoffray): The list of types for the argument is wrong.
-      return new FunctionType(compiler.types.dynamicType,
-                              const EmptyLink<Type>(),
-                              element);
-    }
-    if (element.isClass()) {
-      // TODO(karlklose): substitute type parameters.
-      return element.computeType(compiler);
-    }
-  }
-  Type type = compiler.types.lookup(name);
-  if (type === null) {
-    type = compiler.types.dynamicType;
-  }
-  return type;
-}
-
-class FunctionParameters {
+class FunctionSignature {
   Link<Element> requiredParameters;
   Link<Element> optionalParameters;
+  Type returnType;
   int requiredParameterCount;
   int optionalParameterCount;
-  FunctionParameters(this.requiredParameters,
-                     this.optionalParameters,
-                     this.requiredParameterCount,
-                     this.optionalParameterCount);
+  FunctionSignature(this.requiredParameters,
+                    this.optionalParameters,
+                    this.requiredParameterCount,
+                    this.optionalParameterCount,
+                    this.returnType);
 
   void forEachParameter(void function(Element parameter)) {
     for (Link<Element> link = requiredParameters;
@@ -555,7 +542,7 @@ class FunctionElement extends Element {
   Type type;
   final Modifiers modifiers;
 
-  FunctionParameters functionParameters;
+  FunctionSignature functionSignature;
 
   /**
    * If this is an interface constructor, [defaultImplementation] will
@@ -582,14 +569,14 @@ class FunctionElement extends Element {
                        Element enclosing)
     : this.tooMuchOverloading(name, other.cachedNode, other.kind,
                               other.modifiers, enclosing,
-                              other.functionParameters);
+                              other.functionSignature);
 
   FunctionElement.tooMuchOverloading(SourceString name,
                                      FunctionExpression this.cachedNode,
                                      ElementKind kind,
                                      Modifiers this.modifiers,
                                      Element enclosing,
-                                     FunctionParameters this.functionParameters)
+                                     FunctionSignature this.functionSignature)
     : super(name, kind, enclosing)
   {
     defaultImplementation = this;
@@ -602,43 +589,42 @@ class FunctionElement extends Element {
            && !modifiers.isStatic();
   }
 
-  FunctionParameters computeParameters(Compiler compiler) {
-    if (functionParameters !== null) return functionParameters;
-    functionParameters = compiler.resolveSignature(this);
-    return functionParameters;
+  FunctionSignature computeSignature(Compiler compiler) {
+    if (functionSignature !== null) return functionSignature;
+    compiler.withCurrentElement(this, () {
+      functionSignature = compiler.resolveSignature(this);
+    });
+    return functionSignature;
   }
 
   int requiredParameterCount(Compiler compiler) {
-    return computeParameters(compiler).requiredParameterCount;
+    return computeSignature(compiler).requiredParameterCount;
   }
 
   int optionalParameterCount(Compiler compiler) {
-    return computeParameters(compiler).optionalParameterCount;
+    return computeSignature(compiler).optionalParameterCount;
   }
 
   int parameterCount(Compiler compiler) {
-    return computeParameters(compiler).parameterCount;
+    return computeSignature(compiler).parameterCount;
   }
 
   FunctionType computeType(Compiler compiler) {
     if (type != null) return type;
-    return compiler.withCurrentElement(this, () {
-      FunctionParameters parameters = computeParameters(compiler);
-      Types types = compiler.types;
-      FunctionExpression node =
-          compiler.parser.measure(() => parseNode(compiler));
-      Type returnType = getType(node.returnType, compiler, getLibrary());
-      if (returnType === null) returnType = types.dynamicType;
-
+    compiler.withCurrentElement(this, () {
+      FunctionSignature signature = computeSignature(compiler);
       LinkBuilder<Type> parameterTypes = new LinkBuilder<Type>();
-      for (Link<Element> link = parameters.requiredParameters;
+      for (Link<Element> link = signature.requiredParameters;
            !link.isEmpty();
            link = link.tail) {
-        parameterTypes.addLast(link.head.computeType(compiler));
+         parameterTypes.addLast(link.head.computeType(compiler));
+         // TODO(karlklose): optional parameters.
       }
-      type = new FunctionType(returnType, parameterTypes.toLink(), this);
-      return type;
+      type = new FunctionType(signature.returnType,
+                              parameterTypes.toLink(),
+                              this);
     });
+    return type;
   }
 
   Node parseNode(DiagnosticListener listener) => cachedNode;
@@ -655,7 +641,7 @@ class ConstructorBodyElement extends FunctionElement {
               ElementKind.GENERATIVE_CONSTRUCTOR_BODY,
               null,
               constructor.enclosingElement) {
-    functionParameters = constructor.functionParameters;
+    functionSignature = constructor.functionSignature;
   }
 
   bool isInstanceMember() => true;
@@ -680,7 +666,18 @@ class SynthesizedConstructorElement extends FunctionElement {
   Token position() => enclosingElement.position();
 }
 
+class VoidElement extends Element {
+  VoidElement(Element enclosing)
+      : super(Types.VOID, ElementKind.VOID, enclosing);
+  Type computeType(compiler) => compiler.types.voidType;
+  Node parseNode(_) {
+    throw 'internal error: parseNode on void';
+  }
+  bool impliesType() => true;
+}
+
 class ClassElement extends ContainerElement {
+  final int id;
   Type type;
   Type supertype;
   Type defaultClass;
@@ -688,7 +685,7 @@ class ClassElement extends ContainerElement {
   Map<SourceString, Element> localMembers;
   Map<SourceString, Element> constructors;
   Link<Type> interfaces = const EmptyLink<Type>();
-  Map<SourceString, TypeVariableElement> typeParameters;
+  LinkedHashMap<SourceString, TypeVariableElement> typeParameters;
   bool isResolved = false;
   bool isBeingResolved = false;
   // backendMembers are members that have been added by the backend to simplify
@@ -697,10 +694,10 @@ class ClassElement extends ContainerElement {
 
   Link<Type> allSupertypes;
 
-  ClassElement(SourceString name, CompilationUnitElement enclosing)
+  ClassElement(SourceString name, CompilationUnitElement enclosing, this.id)
     : localMembers = new Map<SourceString, Element>(),
       constructors = new Map<SourceString, Element>(),
-      typeParameters = new Map<SourceString, TypeVariableElement>(),
+      typeParameters = new LinkedHashMap<SourceString, TypeVariableElement>(),
       super(name, ElementKind.CLASS, enclosing);
 
   void addMember(Element element, DiagnosticListener listener) {
@@ -718,7 +715,7 @@ class ClassElement extends ContainerElement {
 
   Type computeType(compiler) {
     if (type === null) {
-      type = new InterfaceType(name, this);
+      type = new InterfaceType(this);
     }
     return type;
   }
@@ -815,7 +812,7 @@ class ClassElement extends ContainerElement {
         }
       }
       classElement = includeSuperMembers ? classElement.superclass : null;
-    } while(classElement !== null);    
+    } while(classElement !== null);
   }
 
   /**
@@ -831,7 +828,7 @@ class ClassElement extends ContainerElement {
   void forEachInstanceField([void f(ClassElement enclosingClass, Element field),
                              includeBackendMembers = false,
                              includeSuperMembers = false]) {
-    // Filters so that [f] is only invoked with instance fields. 
+    // Filters so that [f] is only invoked with instance fields.
     void fieldFilter(ClassElement enclosingClass, Element member) {
       if (member.isInstanceMember() && member.kind == ElementKind.FIELD) {
         f(enclosingClass, member);
@@ -868,6 +865,7 @@ class ClassElement extends ContainerElement {
   bool isInterface() => false;
   bool isNative() => nativeName != null;
   SourceString nativeName;
+  int hashCode() => id;
 }
 
 class Elements {

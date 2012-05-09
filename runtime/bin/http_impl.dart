@@ -55,6 +55,10 @@ class _HttpHeaders implements HttpHeaders {
     _headers.remove(name);
   }
 
+  void forEach(void f(String name, List<String> values)) {
+    _headers.forEach(f);
+  }
+
   String get host() => _host;
 
   void set host(String host) {
@@ -208,7 +212,7 @@ class _HttpHeaders implements HttpHeaders {
       sb.add(": ");
       for (int i = 0; i < values.length; i++) {
         if (i > 0) {
-          sb.add(": ");
+          sb.add(", ");
         }
         sb.add(values[i]);
       }
@@ -238,6 +242,33 @@ class _HttpRequestResponseBase {
 
   int get contentLength() => _contentLength;
   HttpHeaders get headers() => _headers;
+
+  bool get persistentConnection() {
+    List<String> connection = headers[HttpHeaders.CONNECTION];
+    if (_protocolVersion == "1.1") {
+      if (connection == null) return true;
+      return !headers[HttpHeaders.CONNECTION].some(
+          (value) => value.toLowerCase() == "close");
+    } else {
+      if (connection == null) return false;
+      return headers[HttpHeaders.CONNECTION].some(
+          (value) => value.toLowerCase() == "keep-alive");
+    }
+  }
+
+  void set persistentConnection(bool persistentConnection) {
+    if (_outputStream != null) throw new HttpException("Header already sent");
+
+    // Determine the value of the "Connection" header.
+    headers.remove(HttpHeaders.CONNECTION, "close");
+    headers.remove(HttpHeaders.CONNECTION, "keep-alive");
+    if (_protocolVersion == "1.1" && !persistentConnection) {
+      headers.add(HttpHeaders.CONNECTION, "close");
+    } else if (_protocolVersion == "1.0" && persistentConnection) {
+      headers.add(HttpHeaders.CONNECTION, "keep-alive");
+    }
+  }
+
 
   bool _write(List<int> data, bool copyBuffer) {
     _ensureHeadersSent();
@@ -286,6 +317,7 @@ class _HttpRequestResponseBase {
       }
       assert(_bodyBytesWritten == _contentLength);
     }
+    if (!persistentConnection) _httpConnection._close();
     return allWritten;
   }
 
@@ -300,7 +332,7 @@ class _HttpRequestResponseBase {
     final List<int> hexDigits = [0x30, 0x31, 0x32, 0x33, 0x34,
                                  0x35, 0x36, 0x37, 0x38, 0x39,
                                  0x41, 0x42, 0x43, 0x44, 0x45, 0x46];
-    ByteArray hex = new ByteArray(10);
+    List<int> hex = new Uint8List(10);
     int index = hex.length;
     while (x > 0) {
       index--;
@@ -338,6 +370,7 @@ class _HttpRequestResponseBase {
 
   _HttpConnectionBase _httpConnection;
   _HttpHeaders _headers;
+  String _protocolVersion = "1.1";
 
   // Length of the content body. If this is set to -1 (default value)
   // when starting to send data chunked transfer encoding will be
@@ -366,6 +399,8 @@ class _HttpRequest extends _HttpRequestResponseBase implements HttpRequest {
     }
     return _inputStream;
   }
+
+  String get protocolVersion() => _protocolVersion;
 
   void _onRequestStart(String method, String uri, String version) {
     _method = method;
@@ -467,7 +502,7 @@ class _HttpResponse extends _HttpRequestResponseBase implements HttpResponse {
     return _outputStream;
   }
 
-  Socket detachSocket() {
+  DetachedSocket detachSocket() {
     if (_state >= DONE) throw new HttpException("Response closed");
     // Ensure that headers are written.
     if (_state == START) {
@@ -578,6 +613,11 @@ class _HttpResponse extends _HttpRequestResponseBase implements HttpResponse {
   bool _writeHeader() {
     List<int> data;
 
+    // HTTP/1.0 does not support chunked.
+    if (_protocolVersion == "1.0" && _contentLength < 0) {
+      throw new HttpException("Content length required for HTTP 1.0");
+    }
+
     // Write status line.
     if (_protocolVersion == "1.1") {
       _httpConnection._write(_Const.HTTP11);
@@ -592,18 +632,12 @@ class _HttpResponse extends _HttpRequestResponseBase implements HttpResponse {
     _httpConnection._write(data);
     _writeCRLF();
 
-    // Determine the value of the "Connection" header.
-    if (_protocolVersion == "1.1" && !_persistentConnection) {
-      _headers.set("Connection", "close");
-    } else if (_protocolVersion == "1.0" && _persistentConnection) {
-      _headers.set("Connection", "keep-alive");
-    }
     // Determine the value of the "Transfer-Encoding" header based on
     // whether the content length is known.
     if (_contentLength > 0) {
-      _headers.set("Content-Length", _contentLength.toString());
-    } else {
-      _headers.set("Transfer-Encoding", "chunked");
+      _headers.set(HttpHeaders.CONTENT_LENGTH, _contentLength.toString());
+    } else if (_contentLength < 0) {
+      _headers.set(HttpHeaders.TRANSFER_ENCODING, "chunked");
     }
 
     // Write headers.
@@ -615,8 +649,6 @@ class _HttpResponse extends _HttpRequestResponseBase implements HttpResponse {
   // Response status code.
   int _statusCode;
   String _reasonPhrase;
-  String _protocolVersion;
-  bool _persistentConnection;
   _HttpOutputStream _outputStream;
   Function _streamErrorHandler;
 }
@@ -730,6 +762,11 @@ class _HttpConnectionBase implements Hashable {
 
   bool _close() {
     _closing = true;
+    _socket.outputStream.close();
+  }
+
+  bool _destroy() {
+    _closing = true;
     _socket.close();
   }
 
@@ -739,14 +776,16 @@ class _HttpConnectionBase implements Hashable {
       return;
     }
 
-    ByteArray buffer = new ByteArray(available);
+    List<int> buffer = new Uint8List(available);
     int bytesRead = _socket.readList(buffer, 0, available);
     if (bytesRead > 0) {
       int parsed = _httpParser.writeList(buffer, 0, bytesRead);
       if (!_httpParser.upgrade) {
         if (parsed != bytesRead) {
-          // TODO(sgjesse): Error handling.
-          _close();
+          if (_socket != null) {
+            // TODO(sgjesse): Error handling.
+            _destroy();
+          }
         }
       }
     }
@@ -766,16 +805,15 @@ class _HttpConnectionBase implements Hashable {
     _onConnectionClosed(e);
   }
 
-  Socket _detachSocket() {
+  DetachedSocket _detachSocket() {
     _socket.onData = null;
-    // TODO(sgjesse): Handle getting the write handler when using output stream.
-    //_socket.onWrite = null;
     _socket.onClosed = null;
     _socket.onError = null;
+    _socket.outputStream.onNoPendingWrites = null;
     Socket socket = _socket;
     _socket = null;
-    if (onDetach) onDetach();
-    return socket;
+    if (onDetach != null) onDetach();
+    return new _DetachedSocket(socket, _httpParser.unparsedData);
   }
 
   abstract void _onConnectionClosed(e);
@@ -838,7 +876,7 @@ class _HttpConnection extends _HttpConnectionBase {
 
     // If currently not processing any request just close the socket.
     if (_httpParser.isIdle) {
-      _close();
+      _destroy();
       if (onClosed != null && e == null) {
         // Don't call onClosed if onError has been called.
         onClosed();
@@ -858,6 +896,7 @@ class _HttpConnection extends _HttpConnectionBase {
     _request = new _HttpRequest(this);
     _response = new _HttpResponse(this);
     _request._onRequestStart(method, uri, version);
+    _request._protocolVersion = version;
     _response._protocolVersion = version;
   }
 
@@ -871,7 +910,7 @@ class _HttpConnection extends _HttpConnectionBase {
 
   void _onHeadersComplete() {
     _request._onHeadersComplete();
-    _response._persistentConnection = _httpParser.persistentConnection;
+    _response.persistentConnection = _httpParser.persistentConnection;
     if (onRequestReceived != null) {
       onRequestReceived(_request, _response);
     }
@@ -931,6 +970,7 @@ class _HttpServer implements HttpServer {
       // Accept the client connection.
       _HttpConnection connection = new _HttpConnection(this);
       connection._connectionEstablished(socket);
+      _connections.add(connection);
       connection.onRequestReceived = _handleRequest;
       connection.onClosed = () => _connections.remove(connection);
       connection.onDetach = () => _connections.remove(connection);
@@ -942,15 +982,13 @@ class _HttpServer implements HttpServer {
           throw(e);
         }
       };
-      connection._connectionEstablished(socket);
-      _connections.add(connection);
     }
     serverSocket.onConnection = onConnection;
     _server = serverSocket;
     _closeServer = false;
   }
 
-  addRequestHandler(bool matcher(String path),
+  addRequestHandler(bool matcher(HttpRequest request),
                     void handler(HttpRequest request, HttpResponse response)) {
     _handlers.add(new _RequestHandlerRegistration(matcher, handler));
   }
@@ -966,7 +1004,7 @@ class _HttpServer implements HttpServer {
     }
     _server = null;
     for (_HttpConnection connection in _connections) {
-      connection._close();
+      connection._destroy();
     }
     _connections.clear();
   }
@@ -1003,6 +1041,9 @@ class _HttpServer implements HttpServer {
       _defaultHandler(request, response);
     } else {
       response.statusCode = HttpStatus.NOT_FOUND;
+      if (request.protocolVersion == "1.0") {
+        response.contentLength = 0;
+      }
       response.outputStream.close();
     }
   }
@@ -1094,9 +1135,9 @@ class _HttpClientRequest
     // whether the content length is known. If there is no content
     // neither "Content-Length" nor "Transfer-Encoding" is set
     if (_contentLength > 0) {
-      _headers.set("Content-Length", _contentLength.toString());
+      _headers.set(HttpHeaders.CONTENT_LENGTH, _contentLength.toString());
     } else if (_contentLength < 0) {
-      _headers.set("Transfer-Encoding", "chunked");
+      _headers.set(HttpHeaders.TRANSFER_ENCODING, "chunked");
     }
 
     // Write headers.
@@ -1122,6 +1163,13 @@ class _HttpClientResponse
   int get statusCode() => _statusCode;
   String get reasonPhrase() => _reasonPhrase;
 
+  bool get isRedirect() {
+    return statusCode == HttpStatus.MOVED_PERMANENTLY ||
+           statusCode == HttpStatus.FOUND ||
+           statusCode == HttpStatus.SEE_OTHER ||
+           statusCode == HttpStatus.TEMPORARY_REDIRECT;
+  }
+
   InputStream get inputStream() {
     if (_inputStream == null) {
       _inputStream = new _HttpInputStream(this);
@@ -1145,7 +1193,32 @@ class _HttpClientResponse
   void _onHeadersComplete() {
     _headers._mutable = false;
     _buffer = new _BufferList();
-    if (_connection._onResponse != null) {
+    if (isRedirect && _connection.followRedirects) {
+      if (_connection._redirects == null ||
+          _connection._redirects.length < _connection.maxRedirects) {
+        // Check the location header.
+        List<String> location = headers[HttpHeaders.LOCATION];
+        if (location == null || location.length > 1) {
+           throw new RedirectException("Invalid redirect",
+                                       _connection._redirects);
+        }
+        // Check for redirect loop
+        if (_connection._redirects != null) {
+          Uri redirectUrl = new Uri.fromString(location[0]);
+          for (int i = 0; i < _connection._redirects.length; i++) {
+            if (_connection._redirects[i].location.toString() ==
+                redirectUrl.toString()) {
+              throw new RedirectLoopException(_connection._redirects);
+            }
+          }
+        }
+        // Drain body and redirect.
+        inputStream.onData = inputStream.read;
+        inputStream.onClosed = _connection.redirect;
+      } else {
+        throw new RedirectLimitExceededException(_connection._redirects);
+      }
+    } else if (_connection._onResponse != null) {
       _connection._onResponse(this);
     }
   }
@@ -1156,8 +1229,8 @@ class _HttpClientResponse
   }
 
   void _onDataEnd() {
-    if (_inputStream != null) _inputStream._closeReceived();
     _connection._responseDone();
+    if (_inputStream != null) _inputStream._closeReceived();
   }
 
   // Delegate functions for the HttpInputStream implementation.
@@ -1231,11 +1304,17 @@ class _HttpClientConnection
     return _request;
   }
 
+  DetachedSocket detachSocket() {
+    return _detachSocket();
+  }
+
   void _onConnectionClosed(e) {
     // Socket is closed either due to an error or due to normal socket close.
     if (e != null) {
       if (_onErrorCallback != null) {
         _onErrorCallback(e);
+      } else {
+        throw e;
       }
     }
     _closing = true;
@@ -1290,6 +1369,26 @@ class _HttpClientConnection
     _onErrorCallback = callback;
   }
 
+  void redirect([String method, Uri url]) {
+    if (_socketConn != null) {
+      throw new HttpException("Cannot redirect with body data pending");
+    }
+    if (method == null) method = _method;
+    if (url == null) {
+      url = new Uri.fromString(_response.headers.value(HttpHeaders.LOCATION));
+    }
+    if (_redirects == null) {
+      _redirects = new List<_RedirectInfo>();
+    }
+    _redirects.add(new _RedirectInfo(_response.statusCode, method, url));
+    _request = null;
+    _response = null;
+    // Open redirect URL using the same connection instance.
+    _client._openUrl(method, url, this);
+  }
+
+  List<RedirectInfo> get redirects() => _redirects;
+
   Function _onRequest;
   Function _onResponse;
   Function _onErrorCallback;
@@ -1299,6 +1398,11 @@ class _HttpClientConnection
   HttpClientRequest _request;
   HttpClientResponse _response;
   String _method;
+
+  // Redirect handling
+  bool followRedirects = true;
+  int maxRedirects = 5;
+  List<_RedirectInfo> _redirects;
 
   // Callbacks.
   var requestReceived;
@@ -1339,11 +1443,28 @@ class _HttpClient implements HttpClient {
 
   HttpClientConnection open(
       String method, String host, int port, String path) {
+    return _open(method, host, port, path);
+  }
+
+  HttpClientConnection _open(String method,
+                             String host,
+                             int port,
+                             String path,
+                             [_HttpClientConnection connection]) {
     if (_shutdown) throw new HttpException("HttpClient shutdown");
-    return _prepareHttpClientConnection(host, port, method, path);
+    if (method == null || host == null || port == null || path == null) {
+      throw new IllegalArgumentException(null);
+    }
+    return _prepareHttpClientConnection(host, port, method, path, connection);
   }
 
   HttpClientConnection openUrl(String method, Uri url) {
+    _openUrl(method, url);
+  }
+
+  HttpClientConnection _openUrl(String method,
+                                Uri url,
+                                [_HttpClientConnection connection]) {
     if (url.scheme != "http") {
       throw new HttpException("Unsupported URL scheme ${url.scheme}");
     }
@@ -1361,20 +1482,20 @@ class _HttpClient implements HttpClient {
     } else {
       path = url.path;
     }
-    return open(method, url.domain, port, path);
+    return _open(method, url.domain, port, path, connection);
   }
 
   HttpClientConnection get(String host, int port, String path) {
-    return open("GET", host, port, path);
+    return _open("GET", host, port, path);
   }
 
-  HttpClientConnection getUrl(Uri url) => openUrl("GET", url);
+  HttpClientConnection getUrl(Uri url) => _openUrl("GET", url);
 
   HttpClientConnection post(String host, int port, String path) {
-    return open("POST", host, port, path);
+    return _open("POST", host, port, path);
   }
 
-  HttpClientConnection postUrl(Uri url) => openUrl("POST", url);
+  HttpClientConnection postUrl(Uri url) => _openUrl("POST", url);
 
   void shutdown() {
      _openSockets.forEach((String key, Queue<_SocketConnection> connections) {
@@ -1397,7 +1518,11 @@ class _HttpClient implements HttpClient {
   }
 
   HttpClientConnection _prepareHttpClientConnection(
-      String host, int port, String method, String path) {
+    String host,
+    int port,
+    String method,
+    String path,
+    [_HttpClientConnection connection]) {
 
     void _connectionOpened(_SocketConnection socketConn,
                            _HttpClientConnection connection) {
@@ -1412,7 +1537,11 @@ class _HttpClient implements HttpClient {
       }
     }
 
-    _HttpClientConnection connection = new _HttpClientConnection(this);
+    // Create a new connection if we are not re-using an existing one.
+    if (connection == null) {
+      connection = new _HttpClientConnection(this);
+    }
+    connection.onDetach = () => _activeSockets.remove(connection._socketConn);
 
     // If there are active connections for this key get the first one
     // otherwise create a new one.
@@ -1505,4 +1634,23 @@ class _HttpClient implements HttpClient {
   Set<_SocketConnection> _activeSockets;
   Timer _evictionTimer;
   bool _shutdown;  // Has this HTTP client been shutdown?
+}
+
+
+class _DetachedSocket implements DetachedSocket {
+  _DetachedSocket(this._socket, this._unparsedData);
+  Socket get socket() => _socket;
+  List<int> get unparsedData() => _unparsedData;
+  Socket _socket;
+  List<int> _unparsedData;
+}
+
+
+class _RedirectInfo implements RedirectInfo {
+  const _RedirectInfo(int this.statusCode,
+                      String this.method,
+                      Uri this.location);
+  final int statusCode;
+  final String method;
+  final Uri location;
 }

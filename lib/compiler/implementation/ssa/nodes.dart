@@ -57,6 +57,7 @@ interface HVisitor<R> {
   R visitTruncatingDivide(HTruncatingDivide node);
   R visitTry(HTry node);
   R visitTypeGuard(HTypeGuard node);
+  R visitTypeConversion(HTypeConversion node);
 }
 
 class HGraphVisitor {
@@ -138,12 +139,11 @@ class HGraph {
     return result;
   }
 
-  HBasicBlock addNewLoopHeaderBlock(int kind,
-                                    TargetElement target,
+  HBasicBlock addNewLoopHeaderBlock(TargetElement target,
                                     List<LabelElement> labels) {
     HBasicBlock result = addNewBlock();
-    result.blockInformation =
-        new HLoopInformation(kind, result, target, labels);
+    result.loopInformation =
+        new HLoopInformation(result, target, labels);
     return result;
   }
 
@@ -154,11 +154,8 @@ class HGraph {
     if (constant.isDouble()) return HType.DOUBLE;
     if (constant.isString()) return HType.STRING;
     if (constant.isList()) return HType.READABLE_ARRAY;
-    if (constant.isMap()) {
-      MapConstant map = constant;
-      return new HNonPrimitiveType(map.type);
-    }
-    return HType.UNKNOWN;
+    ObjectConstant objectConstant = constant;
+    return new HExactType(objectConstant.type);
   }
 
   HConstant addConstant(Constant constant) {
@@ -308,8 +305,9 @@ class HBaseVisitor extends HGraphVisitor implements HVisitor {
   visitThrow(HThrow node) => visitControlFlow(node);
   visitTry(HTry node) => visitControlFlow(node);
   visitTruncatingDivide(HTruncatingDivide node) => visitBinaryArithmetic(node);
-  visitTypeGuard(HTypeGuard node) => visitInstruction(node);
+  visitTypeGuard(HTypeGuard node) => visitCheck(node);
   visitIs(HIs node) => visitInstruction(node);
+  visitTypeConversion(HTypeConversion node) => visitCheck(node);
 }
 
 class SubGraph {
@@ -328,9 +326,15 @@ class SubGraph {
 }
 
 class SubExpression extends SubGraph {
-  final HInstruction expression;
-  const SubExpression(HBasicBlock start, HBasicBlock end, this.expression)
+  const SubExpression(HBasicBlock start, HBasicBlock end)
       : super(start, end);
+
+  /** Find the condition expression if this sub-expression is a condition. */
+  HInstruction get conditionExpression() {
+    HInstruction last = end.last;
+    if (last is HConditionalBranch) return last.inputs[0];
+    return null;
+  }
 }
 
 class HInstructionList {
@@ -418,7 +422,8 @@ class HBasicBlock extends HInstructionList implements Hashable {
 
   HInstructionList phis;
 
-  HBlockInformation blockInformation = null;
+  HLoopInformation loopInformation = null;
+  HBlockFlow blockFlow = null;
   HBasicBlock parentLoopHeader = null;
   List<HTypeGuard> guards;
 
@@ -443,13 +448,16 @@ class HBasicBlock extends HInstructionList implements Hashable {
   bool isClosed() => status == STATUS_CLOSED;
 
   bool isLoopHeader() {
-    if (blockInformation is HLoopInformation) {
-      HLoopInformation info = blockInformation;
-      return (this === info.header);
-    }
-    return false;
+    return loopInformation !== null;
   }
-  bool isLabeledBlock() => blockInformation is HLabeledBlockInformation;
+
+  void setBlockFlow(HBlockInformation blockInfo, HBasicBlock continuation) {
+    blockFlow = new HBlockFlow(blockInfo, continuation);
+  }
+
+  bool isLabeledBlock() =>
+    blockFlow !== null &&
+    blockFlow.body is HLabeledBlockInformation;
 
   HBasicBlock get enclosingLoopHeader() {
     if (isLoopHeader()) return this;
@@ -563,7 +571,6 @@ class HBasicBlock extends HInstructionList implements Hashable {
     assert(isLoopHeader());
     // Only the first entry into the loop is from outside the
     // loop. All other entries must be back edges.
-    HLoopInformation loopInformation = this.blockInformation;
     for (int i = 1, length = predecessors.length; i < length; i++) {
       loopInformation.addBackEdge(predecessors[i]);
     }
@@ -660,6 +667,16 @@ class HBasicBlock extends HInstructionList implements Hashable {
     validator.visitBasicBlock(this);
     return validator.isValid;
   }
+
+  // TODO(ngeoffray): Cache the information if this method ends up
+  // being hot.
+  bool dominates(HBasicBlock other) {
+    do {
+      if (this === other) return true;
+      other = other.dominator;
+    } while (other !== null && other.id >= id);
+    return false;
+  }
 }
 
 
@@ -725,13 +742,13 @@ class HInstruction implements Hashable {
   bool isString() => propagatedType.isString();
   bool isTypeUnknown() => propagatedType.isUnknown();
   bool isIndexablePrimitive() => propagatedType.isIndexablePrimitive();
-  bool isNonPrimitive() => propagatedType.isNonPrimitive();
+  bool canBePrimitive() => propagatedType.canBePrimitive();
 
   /**
    * This is the type the instruction is guaranteed to have. It does not
    * take any propagation into account.
    */
-  HType get guaranteedType() => HType.UNKNOWN;
+  HType guaranteedType = HType.UNKNOWN;
   bool hasGuaranteedType() => !guaranteedType.isUnknown();
 
   /**
@@ -876,6 +893,24 @@ class HInstruction implements Hashable {
     users.length = length;
   }
 
+  // Change all uses of [oldInput] by [this] to [newInput]. Also
+  // updates the [usedBy] of [oldInput] and [newInput].
+  void changeUse(HInstruction oldInput, HInstruction newInput) {
+    for (int i = 0; i < inputs.length; i++) {
+      if (inputs[i] === oldInput) {
+        inputs[i] = newInput;
+        newInput.usedBy.add(this);
+      }
+    }
+    List<HInstruction> oldInputUsers = oldInput.usedBy;
+    for (int i = 0; i < oldInputUsers.length; i++) {
+      if (oldInputUsers[i] == this) {
+        oldInputUsers[i] = oldInputUsers[oldInput.usedBy.length - 1];
+        oldInputUsers.length = oldInputUsers.length - 1;
+      }
+    }
+  }
+
   bool isConstant() => false;
   bool isConstantBoolean() => false;
   bool isConstantNull() => false;
@@ -920,10 +955,10 @@ class HCheck extends HInstruction {
   // TODO(floitsch): make class abstract instead of adding an abstract method.
   abstract accept(HVisitor visitor);
 
-  bool isControlFlow() => true;
+  HInstruction get checkedInput() => inputs[0];
 }
 
-class HTypeGuard extends HInstruction {
+class HTypeGuard extends HCheck {
   final int state;
   final HType guardedType;
   bool isOn = false;
@@ -935,6 +970,7 @@ class HTypeGuard extends HInstruction {
   }
 
   HInstruction get guarded() => inputs.last();
+  HInstruction get checkedInput() => guarded;
 
   HType computeTypeFromInputTypes() {
     return isOn ? guardedType : guarded.propagatedType;
@@ -963,8 +999,9 @@ class HBoundsCheck extends HCheck {
 
   HBoundsCheck(length, index) : super(<HInstruction>[length, index]);
 
-  HInstruction get length() => inputs[0];
-  HInstruction get index() => inputs[1];
+  HInstruction get length() => inputs[1];
+  HInstruction get index() => inputs[0];
+  bool isControlFlow() => true;
 
   void prepareGvn() {
     assert(!hasSideEffects());
@@ -985,6 +1022,7 @@ class HIntegerCheck extends HCheck {
   HIntegerCheck(value) : super(<HInstruction>[value]);
 
   HInstruction get value() => inputs[0];
+  bool isControlFlow() => true;
 
   void prepareGvn() {
     assert(!hasSideEffects());
@@ -1082,17 +1120,16 @@ class HInvokeDynamicSetter extends HInvokeDynamicField {
 }
 
 class HInvokeStatic extends HInvoke {
-  /** The known type that this instruction yields. */
-  final HType knownType;
   /** The first input must be the target. */
-  HInvokeStatic(selector, inputs, [this.knownType = HType.UNKNOWN])
-      : super(selector, inputs);
+  HInvokeStatic(selector, inputs, [HType knownType = HType.UNKNOWN])
+      : super(selector, inputs) {
+    guaranteedType = knownType;
+  }
+
   toString() => 'invoke static: ${element.name}';
   accept(HVisitor visitor) => visitor.visitInvokeStatic(this);
   Element get element() => target.element;
   HStatic get target() => inputs[0];
-
-  HType get guaranteedType() => knownType;
 
   HType computeDesiredTypeForInput(HInstruction input) {
     // TODO(floitsch): we want the target to be a function.
@@ -1114,12 +1151,14 @@ class HInvokeSuper extends HInvokeStatic {
 class HInvokeInterceptor extends HInvokeStatic {
   final SourceString name;
   final bool getter;
+  final bool setter;
 
   HInvokeInterceptor(Selector selector,
                      SourceString this.name,
-                     bool this.getter,
                      List<HInstruction> inputs,
-                     [HType knownType = HType.UNKNOWN])
+                     [HType knownType = HType.UNKNOWN,
+                      bool this.getter = false,
+                      bool this.setter = false])
       : super(selector, inputs, knownType);
 
   toString() => 'invoke interceptor: ${element.name}';
@@ -1173,20 +1212,28 @@ class HInvokeInterceptor extends HInvokeStatic {
 }
 
 class HFieldGet extends HInstruction {
-  final Element element;
-  HFieldGet(Element this.element, HInstruction receiver)
+  final SourceString name;
+  HFieldGet(this.name, HInstruction receiver)
       : super(<HInstruction>[receiver]);
-  HFieldGet.fromActivation(Element this.element) : super(<HInstruction>[]);
+  HFieldGet.fromActivation(this.name) : super(<HInstruction>[]);
 
   HInstruction get receiver() => inputs.length == 1 ? inputs[0] : null;
   accept(HVisitor visitor) => visitor.visitFieldGet(this);
+
+  void prepareGvn() {
+    clearAllSideEffects();
+  }
+
+  int typeCode() => 27;
+  bool typeEquals(other) => other is HFieldGet;
+  bool dataEquals(HFieldGet other) => name == other.name;
 }
 
 class HFieldSet extends HInstruction {
-  final Element element;
-  HFieldSet(Element this.element, HInstruction receiver, HInstruction value)
+  final SourceString name;
+  HFieldSet(this.name, HInstruction receiver, HInstruction value)
       : super(<HInstruction>[receiver, value]);
-  HFieldSet.fromActivation(Element this.element, HInstruction value)
+  HFieldSet.fromActivation(this.name, HInstruction value)
       : super(<HInstruction>[value]);
 
   HInstruction get receiver() => inputs.length == 2 ? inputs[0] : null;
@@ -1623,7 +1670,7 @@ class HTry extends HControlFlow {
 
 class HIf extends HConditionalBranch {
   bool hasElse;
-  HIfBlockInformation blockInformation = null;
+  HBlockFlow blockInformation = null;
   HIf(HInstruction condition, this.hasElse) : super(<HInstruction>[condition]);
   toString() => 'if';
   accept(HVisitor visitor) => visitor.visitIf(this);
@@ -1642,7 +1689,7 @@ class HIf extends HConditionalBranch {
     }
   }
 
-  HBasicBlock get joinBlock() => blockInformation.joinBlock;
+  HBasicBlock get joinBlock() => blockInformation.continuation;
 }
 
 class HLoopBranch extends HConditionalBranch {
@@ -1719,7 +1766,9 @@ class HParameterValue extends HInstruction {
 }
 
 class HThis extends HParameterValue {
-  HThis() : super(null);
+  HThis([HType type = HType.UNKNOWN]) : super(null) {
+    guaranteedType = type;
+  }
   toString() => 'this';
   accept(HVisitor visitor) => visitor.visitThis(this);
 }
@@ -2089,91 +2138,59 @@ class HIndexAssign extends HInvokeStatic {
 }
 
 class HIs extends HInstruction {
-  final Type typeName;
+  final Type typeExpression;
   final bool nullOk;
 
-  HIs(this.typeName, HInstruction expression, [nullOk = false])
-    : this.nullOk = nullOk, super(<HInstruction>[expression]);
+  HIs.withTypeInfoCall(this.typeExpression, HInstruction expression,
+                       HInstruction typeInfo, [this.nullOk = false])
+    : super(<HInstruction>[expression, typeInfo]);
+
+  HIs(this.typeExpression, HInstruction expression, [this.nullOk = false])
+     : super(<HInstruction>[expression]);
 
   HInstruction get expression() => inputs[0];
+
+  HInstruction get typeInfoCall() => inputs[1];
 
   HType get guaranteedType() => HType.BOOLEAN;
 
   accept(HVisitor visitor) => visitor.visitIs(this);
 
-  toString() => "$expression is $typeName";
+  toString() => "$expression is $typeExpression";
 }
 
+class HTypeConversion extends HCheck {
+  HType type;
+  final bool checked;
 
-interface HBlockInformation {
-  bool accept(HBlockInformationVisitor visitor);
-}
-
-interface HBlockInformationVisitor {
-  bool visitLabeledBlockInfo(HLabeledBlockInformation info);
-  bool visitLoopInfo(HLoopInformation info);
-  bool visitIfInfo(HIfBlockInformation info);
-  bool visitAndOrInfo(HAndOrBlockInformation info);
-}
-
-class HLabeledBlockInformation implements HBlockInformation {
-  final SubGraph body;
-  final HBasicBlock joinBlock;
-  final List<LabelElement> labels;
-  final TargetElement target;
-  final bool isContinue;
-
-  HLabeledBlockInformation(this.body, this.joinBlock,
-                           List<LabelElement> labels,
-                           [this.isContinue = false]) :
-      this.labels = labels, this.target = labels[0].target;
-
-  HLabeledBlockInformation.implicit(this.body,
-                                    this.joinBlock,
-                                    this.target,
-                                    [this.isContinue = false])
-      : this.labels = const<LabelElement>[];
-
-  bool accept(HBlockInformationVisitor visitor) =>
-    visitor.visitLabeledBlockInfo(this);
-}
-
-class LoopTypeVisitor extends AbstractVisitor {
-  const LoopTypeVisitor();
-  int visitNode(Node node) {
-    unreachable();
+  HTypeConversion(HType this.type,
+                  HInstruction input,
+                  [bool this.checked = false])
+    : super(<HInstruction>[input]) {
+      sourceElement = input.sourceElement;
   }
-  int visitWhile(While node) => HLoopInformation.WHILE_LOOP;
-  int visitFor(For node) => HLoopInformation.FOR_LOOP;
-  int visitDoWhile(DoWhile node) => HLoopInformation.DO_WHILE_LOOP;
-  int visitForIn(ForIn node) => HLoopInformation.FOR_IN_LOOP;
+
+  HType get guaranteedType() => type;
+
+  accept(HVisitor visitor) => visitor.visitTypeConversion(this);
+
+  bool hasSideEffects() => checked;
 }
 
-class HLoopInformation implements HBlockInformation {
-  static final int WHILE_LOOP = 0;
-  static final int FOR_LOOP = 1;
-  static final int DO_WHILE_LOOP = 2;
-  static final int FOR_IN_LOOP = 3;
-
-  final int kind;
+/** Non-block-based (aka. traditional) loop information. */
+class HLoopInformation {
   final HBasicBlock header;
   final List<HBasicBlock> blocks;
   final List<HBasicBlock> backEdges;
   final List<LabelElement> labels;
   final TargetElement target;
-  SubGraph initializer = null;
-  SubExpression condition = null;
-  SubGraph body = null;
-  SubGraph updates = null;
-  HBasicBlock joinBlock;
 
-  HLoopInformation(this.kind, this.header, this.target, this.labels)
+  /** Corresponding block information for the loop. */
+  HLoopBlockInformation loopBlockInformation;
+
+  HLoopInformation(this.header, this.target, this.labels)
       : blocks = new List<HBasicBlock>(),
         backEdges = new List<HBasicBlock>();
-
-  static int loopType(Node node) {
-    return node.accept(const LoopTypeVisitor());
-  }
 
   void addBackEdge(HBasicBlock predecessor) {
     backEdges.add(predecessor);
@@ -2210,30 +2227,245 @@ class HLoopInformation implements HBlockInformation {
     }
     return result;
   }
-
-  bool accept(HBlockInformationVisitor visitor) => visitor.visitLoopInfo(this);
 }
 
-class HIfBlockInformation implements HBlockInformation {
-  final SubExpression condition;
-  final SubGraph thenGraph;
-  final SubGraph elseGraph;
-  final HBasicBlock joinBlock;
+
+/**
+ * Embedding of a [HBlockInformation] for block-structure based traversal
+ * in a dominator based flow traversal by attaching it to a basic block.
+ * To go back to dominator-based traversal, a [HSubGraphBlockInformation]
+ * structure can be added in the block structure.
+ */
+class HBlockFlow {
+  final HBlockInformation body;
+  final HBasicBlock continuation;
+  HBlockFlow(this.body, this.continuation);
+}
+
+
+/**
+ * Information about a syntactic-like structure.
+ */
+interface HBlockInformation {
+  HBasicBlock get start();
+  HBasicBlock get end();
+  bool accept(HBlockInformationVisitor visitor);
+}
+
+
+/**
+ * Information about a statement-like structure.
+ */
+interface HStatementInformation extends HBlockInformation {
+  bool accept(HStatementInformationVisitor visitor);
+}
+
+
+/**
+ * Information about an expression-like structure.
+ */
+interface HExpressionInformation extends HBlockInformation {
+  bool accept(HExpressionInformationVisitor visitor);
+  HInstruction get conditionExpression();
+}
+
+
+interface HStatementInformationVisitor {
+  bool visitLabeledBlockInfo(HLabeledBlockInformation info);
+  bool visitLoopInfo(HLoopBlockInformation info);
+  bool visitIfInfo(HIfBlockInformation info);
+  bool visitTryInfo(HTryBlockInformation info);
+  bool visitSequenceInfo(HStatementSequenceInformation info);
+  // Pseudo-structure embedding a dominator-based traversal into
+  // the block-structure traversal. This will eventually go away.
+  bool visitSubGraphInfo(HSubGraphBlockInformation info);
+}
+
+
+interface HExpressionInformationVisitor {
+  bool visitAndOrInfo(HAndOrBlockInformation info);
+  bool visitSubExpressionInfo(HSubExpressionBlockInformation info);
+}
+
+
+interface HBlockInformationVisitor extends HStatementInformationVisitor,
+                                           HExpressionInformationVisitor {
+}
+
+
+/**
+ * Generic class wrapping a [SubGraph] as a block-information until
+ * all structures are handled properly.
+ */
+class HSubGraphBlockInformation implements HStatementInformation {
+  final SubGraph subGraph;
+  HSubGraphBlockInformation(this.subGraph);
+
+  HBasicBlock get start() => subGraph.start;
+  HBasicBlock get end() => subGraph.end;
+
+  bool accept(HStatementInformationVisitor visitor) =>
+    visitor.visitSubGraphInfo(this);
+}
+
+
+/**
+ * Generic class wrapping a [SubExpression] as a block-information until
+ * expressions structures are handled properly.
+ */
+class HSubExpressionBlockInformation implements HExpressionInformation {
+  final SubExpression subExpression;
+  HSubExpressionBlockInformation(this.subExpression);
+
+  HBasicBlock get start() => subExpression.start;
+  HBasicBlock get end() => subExpression.end;
+
+  HInstruction get conditionExpression() => subExpression.conditionExpression;
+
+  bool accept(HExpressionInformationVisitor visitor) =>
+    visitor.visitSubExpressionInfo(this);
+}
+
+
+/** A sequence of separate statements. */
+class HStatementSequenceInformation implements HStatementInformation {
+  final List<HStatementInformation> statements;
+  HStatementSequenceInformation(this.statements);
+
+  HBasicBlock get start() => statements[0].start;
+  HBasicBlock get end() => statements.last().end;
+
+  bool accept(HStatementInformationVisitor visitor) =>
+    visitor.visitSequenceInfo(this);
+}
+
+
+class HLabeledBlockInformation implements HStatementInformation {
+  final HStatementInformation body;
+  final List<LabelElement> labels;
+  final TargetElement target;
+  final bool isContinue;
+
+  HLabeledBlockInformation(this.body,
+                           List<LabelElement> labels,
+                           [this.isContinue = false]) :
+      this.labels = labels, this.target = labels[0].target;
+
+  HLabeledBlockInformation.implicit(this.body,
+                                    this.target,
+                                    [this.isContinue = false])
+      : this.labels = const<LabelElement>[];
+
+  HBasicBlock get start() => body.start;
+  HBasicBlock get end() => body.end;
+
+  bool accept(HStatementInformationVisitor visitor) =>
+    visitor.visitLabeledBlockInfo(this);
+}
+
+class LoopTypeVisitor extends AbstractVisitor {
+  const LoopTypeVisitor();
+  int visitNode(Node node) {
+    unreachable();
+  }
+  int visitWhile(While node) => HLoopBlockInformation.WHILE_LOOP;
+  int visitFor(For node) => HLoopBlockInformation.FOR_LOOP;
+  int visitDoWhile(DoWhile node) => HLoopBlockInformation.DO_WHILE_LOOP;
+  int visitForIn(ForIn node) => HLoopBlockInformation.FOR_IN_LOOP;
+}
+
+class HLoopBlockInformation implements HStatementInformation {
+  static final int WHILE_LOOP = 0;
+  static final int FOR_LOOP = 1;
+  static final int DO_WHILE_LOOP = 2;
+  static final int FOR_IN_LOOP = 3;
+
+  final int kind;
+  final HExpressionInformation initializer;
+  final HExpressionInformation condition;
+  final HStatementInformation body;
+  final HExpressionInformation updates;
+  final TargetElement target;
+  final List<LabelElement> labels;
+
+  HLoopBlockInformation(this.kind,
+                        this.initializer,
+                        this.condition,
+                        this.body,
+                        this.updates,
+                        this.target,
+                        this.labels);
+
+  HBasicBlock get start() {
+    if (initializer !== null) return initializer.start;
+    if (kind == DO_WHILE_LOOP) {
+      return body.start;
+    }
+    return condition.start;
+  }
+
+  HBasicBlock get end() {
+    if (updates !== null) return updates.end;
+    if (kind == DO_WHILE_LOOP) {
+      return condition.end;
+    }
+    return body.end;
+  }
+
+  static int loopType(Node node) {
+    return node.accept(const LoopTypeVisitor());
+  }
+
+  bool accept(HStatementInformationVisitor visitor) =>
+    visitor.visitLoopInfo(this);
+}
+
+class HIfBlockInformation implements HStatementInformation {
+  final HExpressionInformation condition;
+  final HStatementInformation thenGraph;
+  final HStatementInformation elseGraph;
   HIfBlockInformation(this.condition,
                       this.thenGraph,
-                      this.elseGraph,
-                      this.joinBlock);
-  bool accept(HBlockInformationVisitor visitor) => visitor.visitIfInfo(this);
+                      this.elseGraph);
+
+  HBasicBlock get start() => condition.start;
+  HBasicBlock get end() => elseGraph === null ? thenGraph.end : elseGraph.end;
+
+  bool accept(HStatementInformationVisitor visitor) =>
+    visitor.visitIfInfo(this);
 }
 
-class HAndOrBlockInformation implements HBlockInformation {
+class HAndOrBlockInformation implements HExpressionInformation {
   final bool isAnd;
-  final SubExpression left;
-  final SubExpression right;
-  final HBasicBlock joinBlock;
+  final HExpressionInformation left;
+  final HExpressionInformation right;
   HAndOrBlockInformation(this.isAnd,
                          this.left,
-                         this.right,
-                         this.joinBlock);
-  bool accept(HBlockInformationVisitor visitor) => visitor.visitAndOrInfo(this);
+                         this.right);
+
+  HBasicBlock get start() => left.start;
+  HBasicBlock get end() => right.end;
+
+  // We don't currently use HAndOrBlockInformation.
+  HInstruction get conditionExpression() { unreachable(); }
+  bool accept(HExpressionInformationVisitor visitor) =>
+    visitor.visitAndOrInfo(this);
+}
+
+class HTryBlockInformation implements HStatementInformation {
+  final HStatementInformation body;
+  final HParameterValue catchVariable;
+  final HStatementInformation catchBlock;
+  final HStatementInformation finallyBlock;
+  HTryBlockInformation(this.body,
+                       this.catchVariable,
+                       this.catchBlock,
+                       this.finallyBlock);
+
+  HBasicBlock get start() => body.start;
+  HBasicBlock get end() =>
+      finallyBlock === null ? catchBlock.end : finallyBlock.end;
+
+  bool accept(HStatementInformationVisitor visitor) =>
+    visitor.visitTryInfo(this);
 }

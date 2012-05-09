@@ -44,18 +44,27 @@ class Interceptors {
   }
 
   Element getStaticInterceptor(SourceString name, int parameters) {
-    String mangledName = "builtin\$${name.slowToString()}\$${parameters}";
-    return compiler.findHelper(new SourceString(mangledName));
+    String mangledName = name.slowToString();
+    Element element = compiler.findInterceptor(new SourceString(mangledName));
+    if (element !== null && element.isFunction()) {
+      // Only pick the function element with the short name if the
+      // number of parameters it expects matches the number we're
+      // passing modulo the receiver.
+      FunctionElement function = element;
+      if (function.parameterCount(compiler) == parameters + 1) return element;
+    }
+    String longMangledName = "$mangledName\$$parameters";
+    return compiler.findInterceptor(new SourceString(longMangledName));
   }
 
   Element getStaticGetInterceptor(SourceString name) {
-    String mangledName = "builtin\$get\$${name.slowToString()}";
-    return compiler.findHelper(new SourceString(mangledName));
+    String mangledName = "get\$${name.slowToString()}";
+    return compiler.findInterceptor(new SourceString(mangledName));
   }
 
   Element getStaticSetInterceptor(SourceString name) {
-    String mangledName = "builtin\$set\$${name.slowToString()}";
-    return compiler.findHelper(new SourceString(mangledName));
+    String mangledName = "set\$${name.slowToString()}";
+    return compiler.findInterceptor(new SourceString(mangledName));
   }
 
   Element getOperatorInterceptor(Operator op) {
@@ -64,17 +73,9 @@ class Interceptors {
   }
 
   Element getBoolifiedVersionOf(Element interceptor) {
+    if (interceptor === null) return interceptor;
     String boolifiedName = "${interceptor.name.slowToString()}B";
     return compiler.findHelper(new SourceString(boolifiedName));
-  }
-
-  /**
-   * Return an interceptor where the return type is guaranteed.
-   */
-  Element getTypedInterceptor(HType type, SourceString name, int parameters) {
-    String mangledName =
-        "builtin\$${name.slowToString()}\$${parameters}\$$type";
-    return compiler.findHelper(new SourceString(mangledName));
   }
 
   Element getPrefixOperatorInterceptor(Operator op) {
@@ -122,6 +123,15 @@ class Interceptors {
 
   Element getMapMaker() {
     return compiler.findHelper(const SourceString('makeLiteralMap'));
+  }
+
+  // TODO(karlklose): move these to different class or rename class?
+  Element getSetRuntimeTypeInfo() {
+    return compiler.findHelper(const SourceString('setRuntimeTypeInfo'));
+  }
+
+  Element getGetRuntimeTypeInfo() {
+    return compiler.findHelper(const SourceString('getRuntimeTypeInfo'));
   }
 }
 
@@ -293,10 +303,11 @@ class LocalsHandler {
         new ClosureTranslator(builder.compiler, builder.elements);
     closureData = translator.translate(node);
 
-    FunctionParameters params = function.computeParameters(builder.compiler);
+    FunctionSignature params = function.computeSignature(builder.compiler);
     params.forEachParameter((Element element) {
-      HParameterValue parameter = new HParameterValue(element);
+      HInstruction parameter = new HParameterValue(element);
       builder.add(parameter);
+      parameter = builder.potentiallyCheckType(parameter, element);
       directLocals[element] = parameter;
     });
 
@@ -318,7 +329,9 @@ class LocalsHandler {
       // Once closures have been mapped to classes their instance members might
       // not have any thisElement if the closure was created inside a static
       // context.
-      HInstruction thisInstruction = new HThis();
+      ClassElement cls = function.enclosingElement;
+      Type type = cls.computeType(builder.compiler);
+      HInstruction thisInstruction = new HThis(new HBoundedType(type));
       builder.add(thisInstruction);
       directLocals[closureData.thisElement] = thisInstruction;
     }
@@ -381,7 +394,7 @@ class LocalsHandler {
       // itself.
       HInstruction receiver = new HThis();
       builder.add(receiver);
-      HInstruction fieldGet = new HFieldGet(redirect, receiver);
+      HInstruction fieldGet = new HFieldGet(redirect.name, receiver);
       builder.add(fieldGet);
       return fieldGet;
     } else if (isBoxed(element)) {
@@ -393,19 +406,32 @@ class LocalsHandler {
       // the box.
       assert(redirect.enclosingElement.kind == ElementKind.VARIABLE);
       HInstruction box = readLocal(redirect.enclosingElement);
-      HInstruction lookup = new HFieldGet(redirect, box);
+      HInstruction lookup = new HFieldGet(redirect.name, box);
       builder.add(lookup);
       return lookup;
     } else {
       assert(isUsedInTry(element));
-      HInstruction variable = new HFieldGet.fromActivation(element);
+      HInstruction variable = new HFieldGet.fromActivation(element.name);
       builder.add(variable);
       return variable;
     }
   }
 
+  HType cachedTypeOfThis;
+
   HInstruction readThis() {
-    return readLocal(closureData.thisElement);
+    HInstruction res = readLocal(closureData.thisElement);
+    if (res.guaranteedType === null) {
+      if (cachedTypeOfThis === null) {
+        assert(closureData.isClosure());
+        Element element = closureData.thisElement;
+        ClassElement cls = element.enclosingElement.enclosingElement;
+        Type type = cls.computeType(builder.compiler);
+        cachedTypeOfThis = new HBoundedType(type);
+      }
+      res.guaranteedType = cachedTypeOfThis;
+    }
+    return res;
   }
 
   /**
@@ -422,7 +448,7 @@ class LocalsHandler {
       // itself.
       HInstruction receiver = new HThis();
       builder.add(receiver);
-      builder.add(new HFieldSet(redirect, receiver, value));
+      builder.add(new HFieldSet(redirect.name, receiver, value));
     } else if (isBoxed(element)) {
       Element redirect = redirectionMapping[element];
       // The box itself could be captured, or be local. A local variable that
@@ -431,10 +457,10 @@ class LocalsHandler {
       // be accessed directly.
       assert(redirect.enclosingElement.kind == ElementKind.VARIABLE);
       HInstruction box = readLocal(redirect.enclosingElement);
-      builder.add(new HFieldSet(redirect, box, value));
+      builder.add(new HFieldSet(redirect.name, box, value));
     } else {
       assert(isUsedInTry(element));
-      builder.add(new HFieldSet.fromActivation(element,value));
+      builder.add(new HFieldSet.fromActivation(element.name, value));
     }
   }
 
@@ -784,10 +810,20 @@ class SsaBuilder implements Visitor {
   /**
    * Returns the constructor body associated with the given constructor or
    * creates a new constructor body, if none can be found.
+   *
+   * Returns [:null:] if the constructor does not have a body.
    */
-  ConstructorBodyElement getConstructorBody(ClassElement classElement,
-                                            FunctionElement constructor) {
+  ConstructorBodyElement getConstructorBody(FunctionElement constructor) {
     assert(constructor.kind === ElementKind.GENERATIVE_CONSTRUCTOR);
+    if (constructor is SynthesizedConstructorElement) return null;
+    FunctionExpression node = constructor.parseNode(compiler);
+    // If we know the body doesn't have any code, we don't generate
+    // it.
+    if (node.body.asBlock() !== null) {
+      NodeList statements = node.body.asBlock().statements;
+      if (statements.isEmpty()) return null;
+    }
+    ClassElement classElement = constructor.enclosingElement;
     ConstructorBodyElement bodyElement;
     for (Link<Element> backendMembers = classElement.backendMembers;
          !backendMembers.isEmpty();
@@ -834,7 +870,7 @@ class SsaBuilder implements Visitor {
     }
 
     int index = 0;
-    FunctionParameters parameters = constructor.computeParameters(compiler);
+    FunctionSignature parameters = constructor.computeSignature(compiler);
     parameters.forEachParameter((Element parameter) {
       HInstruction argument = compiledArguments[index++];
       localsHandler.updateLocal(parameter, argument);
@@ -933,7 +969,7 @@ class SsaBuilder implements Visitor {
     openFunction(functionElement, function);
 
     Map<Element, HInstruction> fieldValues = new Map<Element, HInstruction>();
-    FunctionParameters parameters = functionElement.computeParameters(compiler);
+    FunctionSignature parameters = functionElement.computeSignature(compiler);
     parameters.forEachParameter((Element element) {
       if (element.kind == ElementKind.FIELD_PARAMETER) {
         // If the [element] is a field-parameter (such as [:this.x:] then
@@ -973,14 +1009,11 @@ class SsaBuilder implements Visitor {
     // Generate calls to the constructor bodies.
     for (int index = constructors.length - 1; index >= 0; index--) {
       FunctionElement constructor = constructors[index];
-      // TODO(floitsch): find better way to detect that constructor body is
-      // empty.
-      if (constructor is SynthesizedConstructorElement) continue;
-      ConstructorBodyElement body = getConstructorBody(classElement,
-                                                       constructor);
+      ConstructorBodyElement body = getConstructorBody(constructor);
+      if (body === null) continue;
       List bodyCallInputs = <HInstruction>[];
       bodyCallInputs.add(newObject);
-      body.functionParameters.forEachParameter((parameter) {
+      body.functionSignature.forEachParameter((parameter) {
         bodyCallInputs.add(localsHandler.readLocal(parameter));
       });
       // TODO(ahe): The constructor name is statically resolved. See
@@ -1002,6 +1035,34 @@ class SsaBuilder implements Visitor {
     close(new HGoto()).addSuccessor(block);
 
     open(block);
+  }
+
+  HInstruction potentiallyCheckType(HInstruction original,
+                                    Element sourceElement) {
+    if (!compiler.enableTypeAssertions) return original;
+
+    Type type = sourceElement.computeType(compiler);
+    if (type === null) return original;
+    if (type.element === compiler.dynamicClass) return original;
+    if (type.element === compiler.objectClass) return original;
+
+    HType convertedType = new HType.fromBoundedType(type, compiler, true);
+
+    // TODO(ngeoffray): the factory method should never return null.
+    if (convertedType === null) {
+      return original;
+    }
+
+    // No need to convert if we know the instruction has
+    // [convertedType] as a bound.
+    if (original.guaranteedType == convertedType) {
+      return original;
+    }
+
+    HInstruction instruction =
+        new HTypeConversion(convertedType, original, true);
+    add(instruction);
+    return instruction;
   }
 
   HGraph closeFunction() {
@@ -1113,7 +1174,6 @@ class SsaBuilder implements Visitor {
 
     JumpHandler jumpHandler = createJumpHandler(node);
     HBasicBlock loopEntry = graph.addNewLoopHeaderBlock(
-        HLoopInformation.loopType(node),
         jumpHandler.target,
         jumpHandler.labels());
     previousBlock.addSuccessor(loopEntry);
@@ -1151,6 +1211,16 @@ class SsaBuilder implements Visitor {
     }
   }
 
+  HSubGraphBlockInformation wrapStatementGraph(SubGraph statements) {
+    if (statements === null) return null;
+    return new HSubGraphBlockInformation(statements);
+  }
+
+  HSubExpressionBlockInformation wrapExpressionGraph(SubExpression expression) {
+    if (expression === null) return null;
+    return new HSubExpressionBlockInformation(expression);
+  }
+
   // For while loops, initializer and update are null.
   // The condition function must return a boolean result.
   // None of the functions must leave anything on the stack.
@@ -1171,24 +1241,27 @@ class SsaBuilder implements Visitor {
     localsHandler.startLoop(loop);
 
     // The initializer.
-    HBasicBlock initializerBlock = openNewBlock();
-    initialize();
-    assert(!isAborted());
-    SubGraph initializerGraph = new SubGraph(initializerBlock, current);
+    SubExpression initializerGraph = null;
+    HBasicBlock startBlock;
+    if (initialize !== null) {
+      HBasicBlock initializerBlock = openNewBlock();
+      startBlock = initializerBlock;
+      initialize();
+      assert(!isAborted());
+      initializerGraph =
+          new SubExpression(initializerBlock, current);
+    }
 
     JumpHandler jumpHandler = beginLoopHeader(loop);
+    HLoopInformation loopInfo = current.loopInformation;
     HBasicBlock conditionBlock = current;
-    HLoopInformation loopInfo = current.blockInformation;
-    // The initializer graph is currently unused due to the way we
-    // generate code.
-    loopInfo.initializer = initializerGraph;
+    if (startBlock === null) startBlock = conditionBlock;
 
     HInstruction conditionInstruction = condition();
     HBasicBlock conditionExitBlock =
         close(new HLoopBranch(conditionInstruction));
-    loopInfo.condition = new SubExpression(conditionBlock,
-                                           conditionExitBlock,
-                                           conditionInstruction);
+    SubExpression conditionExpression =
+        new SubExpression(conditionBlock, conditionExitBlock);
 
     LocalsHandler savedLocals = new LocalsHandler.from(localsHandler);
 
@@ -1202,7 +1275,6 @@ class SsaBuilder implements Visitor {
 
     SubGraph bodyGraph = new SubGraph(beginBodyBlock, current);
     HBasicBlock bodyBlock = close(new HGoto());
-    loopInfo.body = bodyGraph;
 
     // Update.
     // We create an update block, even when we are in a while loop. There the
@@ -1226,13 +1298,19 @@ class SsaBuilder implements Visitor {
     List<LabelElement> labels = jumpHandler.labels();
     TargetElement target = elements[loop];
     if (!labels.isEmpty()) {
-      beginBodyBlock.blockInformation =
-          new HLabeledBlockInformation(bodyGraph, updateBlock,
-                                       jumpHandler.labels(), isContinue: true);
+      beginBodyBlock.setBlockFlow(
+          new HLabeledBlockInformation(
+              new HSubGraphBlockInformation(bodyGraph),
+              jumpHandler.labels(),
+              isContinue: true),
+          updateBlock);
     } else if (target !== null && target.isContinueTarget) {
-      beginBodyBlock.blockInformation =
-          new HLabeledBlockInformation.implicit(bodyGraph, updateBlock,
-                                                target, isContinue: true);
+      beginBodyBlock.setBlockFlow(
+          new HLabeledBlockInformation.implicit(
+              new HSubGraphBlockInformation(bodyGraph),
+              target,
+              isContinue: true),
+          updateBlock);
     }
 
     localsHandler.enterLoopUpdates(loop);
@@ -1243,11 +1321,21 @@ class SsaBuilder implements Visitor {
     // The back-edge completing the cycle.
     updateEndBlock.addSuccessor(conditionBlock);
     conditionBlock.postProcessLoopHeader();
-    loopInfo.updates = new SubGraph(updateBlock, updateEndBlock);
+    SubExpression updateGraph = new SubExpression(updateBlock, updateEndBlock);
 
     endLoop(conditionBlock, conditionExitBlock, jumpHandler, savedLocals);
-    loopInfo.joinBlock = current;
-    initializerBlock.blockInformation = loopInfo;
+    HLoopBlockInformation info =
+        new HLoopBlockInformation(
+            HLoopBlockInformation.loopType(loop),
+            wrapExpressionGraph(initializerGraph),
+            wrapExpressionGraph(conditionExpression),
+            wrapStatementGraph(bodyGraph),
+            wrapExpressionGraph(updateGraph),
+            conditionBlock.loopInformation.target,
+            conditionBlock.loopInformation.labels);
+
+    startBlock.setBlockFlow(info, current);
+    loopInfo.loopBlockInformation = info;
   }
 
   visitFor(For node) {
@@ -1300,7 +1388,7 @@ class SsaBuilder implements Visitor {
     LocalsHandler savedLocals = new LocalsHandler.from(localsHandler);
     localsHandler.startLoop(node);
     JumpHandler jumpHandler = beginLoopHeader(node);
-    HLoopInformation loopInfo = current.blockInformation;
+    HLoopInformation loopInfo = current.loopInformation;
     HBasicBlock loopEntryBlock = current;
     HBasicBlock bodyEntryBlock = current;
     TargetElement target = elements[node];
@@ -1334,19 +1422,16 @@ class SsaBuilder implements Visitor {
       localsHandler = savedLocals.mergeMultiple(continueLocals, conditionBlock);
       SubGraph bodyGraph = new SubGraph(bodyEntryBlock, bodyExitBlock);
       List<LabelElement> labels = jumpHandler.labels();
+      HSubGraphBlockInformation bodyInfo =
+          new HSubGraphBlockInformation(bodyGraph);
+      HLabeledBlockInformation info;
       if (!labels.isEmpty()) {
-        bodyEntryBlock.blockInformation =
-            new HLabeledBlockInformation(bodyGraph,
-                                         conditionBlock,
-                                         labels,
-                                         isContinue: true);
+        info = new HLabeledBlockInformation(bodyInfo, labels, isContinue: true);
       } else {
-        bodyEntryBlock.blockInformation =
-            new HLabeledBlockInformation.implicit(bodyGraph,
-                                                  conditionBlock,
-                                                  target,
-                                                  isContinue: true);
+        info = new HLabeledBlockInformation.implicit(bodyInfo, target,
+                                                     isContinue: true);
       }
+      bodyEntryBlock.setBlockFlow(info, conditionBlock);
     }
     open(conditionBlock);
 
@@ -1362,10 +1447,21 @@ class SsaBuilder implements Visitor {
     endLoop(loopEntryBlock, conditionEndBlock, jumpHandler, localsHandler);
     jumpHandler.close();
 
-    loopInfo.body = new SubGraph(bodyEntryBlock, bodyExitBlock);
-    loopInfo.condition = new SubExpression(conditionBlock, conditionEndBlock,
-                                           conditionInstruction);
-    loopInfo.joinBlock = current;
+    SubExpression conditionExpression =
+        new SubExpression(conditionBlock, conditionEndBlock);
+    SubGraph bodyGraph = new SubGraph(bodyEntryBlock, bodyExitBlock);
+
+    HLoopBlockInformation loopBlockInfo =
+        new HLoopBlockInformation(
+            HLoopBlockInformation.DO_WHILE_LOOP,
+            null,
+            wrapExpressionGraph(conditionExpression),
+            wrapStatementGraph(bodyGraph),
+            null,
+            loopEntryBlock.loopInformation.target,
+            loopEntryBlock.loopInformation.labels);
+    loopEntryBlock.setBlockFlow(loopBlockInfo, current);
+    loopInfo.loopBlockInformation = loopBlockInfo;
   }
 
   visitFunctionExpression(FunctionExpression node) {
@@ -1422,7 +1518,7 @@ class SsaBuilder implements Visitor {
     HBasicBlock conditionStartBlock = openNewBlock();
     visitCondition();
     SubExpression conditionGraph =
-        new SubExpression(conditionStartBlock, lastOpenedBlock, stack.last());
+        new SubExpression(conditionStartBlock, lastOpenedBlock);
     bool hasElse = visitElse != null;
     HInstruction condition = popBoolified();
     HIf branch = new HIf(condition, hasElse);
@@ -1474,12 +1570,13 @@ class SsaBuilder implements Visitor {
         localsHandler = thenLocals;
       }
     }
-    HIfBlockInformation info = new HIfBlockInformation(conditionGraph,
-                                                       thenGraph,
-                                                       elseGraph,
-                                                       joinBlock);
-    conditionStartBlock.blockInformation = info;
-    branch.blockInformation = info;
+    HIfBlockInformation info =
+        new HIfBlockInformation(
+            new HSubExpressionBlockInformation(conditionGraph),
+            new HSubGraphBlockInformation(thenGraph),
+            wrapStatementGraph(elseGraph));
+    conditionStartBlock.setBlockFlow(info, joinBlock);
+    branch.blockInformation = conditionStartBlock.blockFlow;
   }
 
   void visitLogicalAndOr(Send node, Operator op) {
@@ -1510,7 +1607,7 @@ class SsaBuilder implements Visitor {
       add(condition);
     }
     SubExpression leftGraph =
-        new SubExpression(leftBlock, lastOpenedBlock, boolifiedLeft);
+        new SubExpression(leftBlock, lastOpenedBlock);
     HIf branch = new HIf(condition, false);
     leftBlock = close(branch);
     LocalsHandler savedLocals = new LocalsHandler.from(localsHandler);
@@ -1522,7 +1619,7 @@ class SsaBuilder implements Visitor {
     right();
     HInstruction boolifiedRight = popBoolified();
     SubExpression rightGraph =
-        new SubExpression(rightBlock, current, boolifiedRight);
+        new SubExpression(rightBlock, current);
     rightBlock = close(new HGoto());
 
     HBasicBlock joinBlock = addNewBlock();
@@ -1530,10 +1627,19 @@ class SsaBuilder implements Visitor {
     rightBlock.addSuccessor(joinBlock);
     open(joinBlock);
 
-    leftGraph.start.blockInformation =
-        new HAndOrBlockInformation(isAnd, leftGraph, rightGraph, joinBlock);
-    branch.blockInformation =
-        new HIfBlockInformation(leftGraph, rightGraph, null, joinBlock);
+    leftGraph.start.setBlockFlow(
+        new HAndOrBlockInformation(
+          isAnd,
+          new HSubExpressionBlockInformation(leftGraph),
+          new HSubExpressionBlockInformation(rightGraph)),
+        joinBlock);
+    // Fallback until we handle and-or-information better.
+    branch.blockInformation = new HBlockFlow(
+      new HIfBlockInformation(
+        new HSubExpressionBlockInformation(leftGraph),
+        new HSubGraphBlockInformation(rightGraph),
+        null
+      ), joinBlock);
 
     localsHandler.mergeWith(savedLocals, joinBlock);
     HPhi result = new HPhi.manyInputs(null,
@@ -1684,7 +1790,7 @@ class SsaBuilder implements Visitor {
       HStatic target = new HStatic(staticInterceptor);
       add(target);
       List<HInstruction> inputs = <HInstruction>[target, receiver];
-      push(new HInvokeInterceptor(selector, getterName, true, inputs));
+      push(new HInvokeInterceptor(selector, getterName, inputs, getter: true));
     } else {
       push(new HInvokeDynamicGetter(selector, null, getterName, receiver));
     }
@@ -1728,7 +1834,8 @@ class SsaBuilder implements Visitor {
       HStatic target = new HStatic(staticInterceptor);
       add(target);
       List<HInstruction> inputs = <HInstruction>[target, receiver, value];
-      add(new HInvokeInterceptor(selector, dartSetterName, false, inputs));
+      add(new HInvokeInterceptor(
+          selector, dartSetterName, inputs, setter: true));
     } else {
       add(new HInvokeDynamicSetter(selector, null, dartSetterName,
                                    receiver, value));
@@ -1751,12 +1858,17 @@ class SsaBuilder implements Visitor {
       HInstruction receiver = generateInstanceSendReceiver(send);
       generateInstanceSetterWithCompiledReceiver(send, receiver, value);
     } else {
-      localsHandler.updateLocal(element, value);
       stack.add(value);
       // If the value does not already have a name, give it here.
       if (value.sourceElement === null) {
         value.sourceElement = element;
       }
+      HInstruction checked = potentiallyCheckType(value, element);
+      if (checked !== value) {
+        pop();
+        stack.add(checked);
+      }
+      localsHandler.updateLocal(element, checked);
     }
   }
 
@@ -1790,7 +1902,18 @@ class SsaBuilder implements Visitor {
         typeAnnotation = argument.asSend().receiver;
         isNot = true;
       }
+
       Type type = elements.getType(typeAnnotation);
+      HInstruction typeInfo = null;
+      if (compiler.universe.rti.hasTypeArguments(type)) {
+        HInstruction typeInfoGetter =
+            new HStatic(interceptors.getGetRuntimeTypeInfo());
+        add(typeInfoGetter);
+        typeInfo = new HInvokeStatic(Selector.INVOCATION_1,
+                                     <HInstruction>[typeInfoGetter,
+                                                    expression]);
+        add(typeInfo);
+      }
       if (type.element.kind === ElementKind.TYPE_VARIABLE) {
         // TODO(karlklose): We emulate the frog behavior and answer
         // true to any is check involving a type variable -- both is T
@@ -1798,7 +1921,12 @@ class SsaBuilder implements Visitor {
         // reified generics.
         stack.add(graph.addConstantBool(true));
       } else {
-        HInstruction instruction = new HIs(type, expression);
+        HInstruction instruction;
+        if (typeInfo !== null) {
+          instruction = new HIs.withTypeInfoCall(type, expression, typeInfo);
+        } else {
+          instruction = new HIs(type, expression);
+        }
         if (isNot) {
           add(instruction);
           instruction = new HNot(instruction);
@@ -1914,7 +2042,7 @@ class SsaBuilder implements Visitor {
       visit(node.receiver);
       inputs.add(pop());
       addGenericSendArgumentsToList(node.arguments, inputs);
-      push(new HInvokeInterceptor(selector, dartMethodName, false, inputs));
+      push(new HInvokeInterceptor(selector, dartMethodName, inputs));
       return;
     }
 
@@ -2072,7 +2200,7 @@ class SsaBuilder implements Visitor {
           node: closure);
     }
     FunctionElement function = element;
-    FunctionParameters parameters = function.computeParameters(compiler);
+    FunctionSignature parameters = function.computeSignature(compiler);
     if (parameters.optionalParameterCount !== 0) {
       compiler.cancel(
           'JS_TO_CLOSURE does not handle closure with optional parameters',
@@ -2153,20 +2281,74 @@ class SsaBuilder implements Visitor {
     }
   }
 
-  visitStaticSend(Send node) {
+  visitNewSend(Send node) {
+    computeType(element) {
+      Element originalElement = elements[node];
+      if (originalElement.enclosingElement === compiler.listClass) {
+        if (node.arguments.isEmpty()) {
+          return HType.EXTENDABLE_ARRAY;
+        } else {
+          return HType.MUTABLE_ARRAY;
+        }
+      } else if (element.isGenerativeConstructor()) {
+        ClassElement cls = element.enclosingElement;
+        return new HExactType(cls.type);
+      } else {
+        return HType.UNKNOWN;
+      }
+    }
+
     Selector selector = elements.getSelector(node);
     Element element = elements[node];
-    if (element.kind === ElementKind.GENERATIVE_CONSTRUCTOR) {
-      compiler.resolver.resolveMethodElement(element);
-      FunctionElement functionElement = element;
-      element = functionElement.defaultImplementation;
-    }
+    compiler.resolver.resolveMethodElement(element);
+    FunctionElement functionElement = element;
+    element = functionElement.defaultImplementation;
     HInstruction target = new HStatic(element);
     add(target);
     var inputs = <HInstruction>[];
     inputs.add(target);
-    if (element.kind == ElementKind.FUNCTION ||
-        element.kind == ElementKind.GENERATIVE_CONSTRUCTOR) {
+    bool succeeded = addStaticSendArgumentsToList(selector, node.arguments,
+                                                  element, inputs);
+    if (!succeeded) {
+      // TODO(ngeoffray): Match the VM behavior and throw an
+      // exception at runtime.
+      compiler.cancel('Unimplemented non-matching static call', node: node);
+    }
+
+    HType elementType = computeType(element);
+    HInstruction newInstance = new HInvokeStatic(selector, inputs, elementType);
+    push(newInstance);
+
+    TypeAnnotation annotation = getTypeAnnotationFromSend(node);
+    Type type = elements.getType(annotation);
+    generateSetRuntimeTypeInformation(newInstance, type);
+  }
+
+  generateSetRuntimeTypeInformation(HInstruction instance, Type type) {
+    if (compiler.universe.rti.hasTypeArguments(type)) {
+      String typeString = compiler.universe.rti.asJsString(type);
+      HInstruction typeInfo = new HForeign(new LiteralDartString(typeString),
+                                           new LiteralDartString('Object'),
+                                           <HInstruction>[]);
+      add(typeInfo);
+      HInstruction typeInfoSetter =
+          new HStatic(interceptors.getSetRuntimeTypeInfo());
+      add(typeInfoSetter);
+      Selector setSelector = Selector.INVOCATION_2;
+      var inputs = <HInstruction>[typeInfoSetter, instance, typeInfo];
+      add(new HInvokeStatic(setSelector, inputs));
+    }
+  }
+
+  visitStaticSend(Send node) {
+    Selector selector = elements.getSelector(node);
+    Element element = elements[node];
+    compiler.ensure(element.kind !== ElementKind.GENERATIVE_CONSTRUCTOR);
+    HInstruction target = new HStatic(element);
+    add(target);
+    var inputs = <HInstruction>[];
+    inputs.add(target);
+    if (element.kind == ElementKind.FUNCTION) {
       bool succeeded = addStaticSendArgumentsToList(selector, node.arguments,
                                                     element, inputs);
       if (!succeeded) {
@@ -2174,20 +2356,7 @@ class SsaBuilder implements Visitor {
         // exception at runtime.
         compiler.cancel('Unimplemented non-matching static call', node: node);
       }
-      HType type = HType.UNKNOWN;
-      Element originalElement = elements[node];
-      if (originalElement.isGenerativeConstructor()
-          && originalElement.enclosingElement === compiler.listClass) {
-        if (node.arguments.isEmpty()) {
-          type = HType.EXTENDABLE_ARRAY;
-        } else {
-          type = HType.MUTABLE_ARRAY;
-        }
-      } else if (element.isGenerativeConstructor()) {
-        ClassElement cls = element.enclosingElement;
-        type = new HNonPrimitiveType(cls.type);
-      }
-      push(new HInvokeStatic(selector, inputs, type));
+      push(new HInvokeStatic(selector, inputs));
     } else {
       if (element.kind == ElementKind.GETTER) {
         target = new HInvokeStatic(Selector.GETTER, inputs);
@@ -2235,13 +2404,28 @@ class SsaBuilder implements Visitor {
     }
   }
 
+  // TODO(karlklose): share with resolver.
+  TypeAnnotation getTypeAnnotationFromSend(Send send) {
+    if (send.selector is TypeAnnotation) {
+      return send.selector;
+    } else if (send.selector is Send) {
+      Send selector = send.selector;
+      if (selector.receiver is TypeAnnotation) {
+        return selector.receiver;
+      }
+    } else {
+      compiler.internalError("malformed send in new expression");
+    }
+  }
+
   visitNewExpression(NewExpression node) {
     if (node.isConst()) {
+      // TODO(karlklose): add type representation
       ConstantHandler handler = compiler.constantHandler;
       Constant constant = handler.compileNodeWithDefinitions(node, elements);
       stack.add(graph.addConstant(constant));
     } else {
-      visitSend(node.send);
+      visitNewSend(node.send);
     }
   }
 
@@ -2479,7 +2663,7 @@ class SsaBuilder implements Visitor {
     visit(node.condition);
     HIf condition = new HIf(popBoolified(), true);
     SubExpression conditionGraph =
-        new SubExpression(conditionStartBlock, current, condition);
+        new SubExpression(conditionStartBlock, current);
     HBasicBlock conditionBlock = close(condition);
     LocalsHandler savedLocals = new LocalsHandler.from(localsHandler);
 
@@ -2504,10 +2688,14 @@ class SsaBuilder implements Visitor {
     HBasicBlock joinBlock = addNewBlock();
     thenBlock.addSuccessor(joinBlock);
     elseBlock.addSuccessor(joinBlock);
-    condition.blockInformation = new HIfBlockInformation(conditionGraph,
-                                                         thenGraph,
-                                                         elseGraph,
-                                                         joinBlock);
+
+    // TODO(lrn): Handle expressions better.
+    condition.blockInformation = new HBlockFlow(
+        new HIfBlockInformation(
+          new HSubExpressionBlockInformation(conditionGraph),
+          new HSubGraphBlockInformation(thenGraph),
+          new HSubGraphBlockInformation(elseGraph)),
+        joinBlock);
     open(joinBlock);
 
     localsHandler.mergeWith(thenLocals, joinBlock);
@@ -2600,7 +2788,7 @@ class SsaBuilder implements Visitor {
       add(target);
       visit(node.expression);
       List<HInstruction> inputs = <HInstruction>[target, pop()];
-      iterator = new HInvokeInterceptor(selector, iteratorName, false, inputs);
+      iterator = new HInvokeInterceptor(selector, iteratorName, inputs);
       add(iterator);
     }
     HInstruction buildCondition() {
@@ -2668,8 +2856,10 @@ class SsaBuilder implements Visitor {
 
     if (hasBreak) {
       // There was at least one reachable break, so the label is needed.
-      entryBlock.blockInformation =
-          new HLabeledBlockInformation(bodyGraph, joinBlock, handler.labels());
+      entryBlock.setBlockFlow(
+          new HLabeledBlockInformation(new HSubGraphBlockInformation(bodyGraph),
+                                       handler.labels()),
+          joinBlock);
     }
     handler.close();
   }
@@ -2749,10 +2939,11 @@ class SsaBuilder implements Visitor {
       // The joinblock is not used.
       joinBlock = null;
     }
-    startBlock.blockInformation = new HLabeledBlockInformation.implicit(
-        new SubGraph(startBlock, lastBlock),
-        joinBlock,
-        elements[node]);
+    startBlock.setBlockFlow(
+        new HLabeledBlockInformation.implicit(
+            new HSubGraphBlockInformation(new SubGraph(startBlock, lastBlock)),
+            elements[node]),
+        joinBlock);
     jumpHandler.close();
   }
 
@@ -2848,7 +3039,9 @@ class SsaBuilder implements Visitor {
     open(tryBody);
     visit(node.tryBlock);
     if (!isAborted()) blocks.add(close(new HGoto()));
-
+    SubGraph bodyGraph = new SubGraph(tryBody, lastOpenedBlock);
+    SubGraph catchGraph = null;
+    HParameterValue exception = null;
     if (!node.catchBlocks.isEmpty()) {
       HBasicBlock block = graph.addNewBlock();
       enterBlock.addSuccessor(block);
@@ -2856,7 +3049,7 @@ class SsaBuilder implements Visitor {
       // Note that the name of this element is irrelevant.
       Element element = new Element(
           const SourceString('exception'), ElementKind.PARAMETER, work.element);
-      HParameterValue exception = new HParameterValue(element);
+      exception = new HParameterValue(element);
       add(exception);
       HInstruction oldRethrowableException = rethrowableException;
       rethrowableException = exception;
@@ -2914,9 +3107,12 @@ class SsaBuilder implements Visitor {
       CatchBlock firstBlock = link.head;
       handleIf(() { pushCondition(firstBlock); }, visitThen, visitElse);
       if (!isAborted()) blocks.add(close(new HGoto()));
+
       rethrowableException = oldRethrowableException;
+      catchGraph = new SubGraph(block, lastOpenedBlock);
     }
 
+    SubGraph finallyGraph = null;
     if (node.finallyBlock != null) {
       HBasicBlock finallyBlock = graph.addNewBlock();
       enterBlock.addSuccessor(finallyBlock);
@@ -2924,6 +3120,7 @@ class SsaBuilder implements Visitor {
       visit(node.finallyBlock);
       if (!isAborted()) blocks.add(close(new HGoto()));
       tryInstruction.finallyBlock = finallyBlock;
+      finallyGraph = new SubGraph(finallyBlock, lastOpenedBlock);
     }
 
     HBasicBlock exitBlock = graph.addNewBlock();
@@ -2933,6 +3130,13 @@ class SsaBuilder implements Visitor {
     }
 
     open(exitBlock);
+    enterBlock.setBlockFlow(
+        new HTryBlockInformation(
+          wrapStatementGraph(bodyGraph),
+          exception,
+          wrapStatementGraph(catchGraph),
+          wrapStatementGraph(finallyGraph)),
+        exitBlock);
   }
 
   visitScriptTag(ScriptTag node) {
@@ -2990,6 +3194,8 @@ class SsaBuilder implements Visitor {
  */
 class StringBuilderVisitor extends AbstractVisitor {
   final SsaBuilder builder;
+  final Element stringConcat;
+  final Element stringToString;
 
   /**
    * Offset used for the synthetic operator token used by concat.
@@ -3009,7 +3215,12 @@ class StringBuilderVisitor extends AbstractVisitor {
    */
   HInstruction prefix = null;
 
-  StringBuilderVisitor(this.builder, this.offset);
+  StringBuilderVisitor(builder, this.offset)
+    : this.builder = builder,
+      stringConcat = builder.compiler.findHelper(
+          const SourceString("stringConcat")),
+      stringToString = builder.compiler.findHelper(
+          const SourceString("stringToString"));
 
   void visit(Node node) {
     node.accept(this);
@@ -3023,7 +3234,7 @@ class StringBuilderVisitor extends AbstractVisitor {
     flushLiterals();
     node.accept(builder);
     HInstruction asString = buildToString(node, builder.pop());
-    prefix = concat(prefix, asString);
+    prefix = buildConcat(prefix, asString);
   }
 
   void visitLiteralNull(LiteralNull node) {
@@ -3085,54 +3296,25 @@ class StringBuilderVisitor extends AbstractVisitor {
     HInstruction string = builder.graph.addConstantString(literalAccumulator);
     literalAccumulator = new DartString.empty();
     if (prefix !== null) {
-      prefix = concat(prefix, string);
+      prefix = buildConcat(prefix, string);
     } else {
       prefix = string;
     }
   }
 
-  HInstruction concat(HInstruction left, HInstruction right) {
-    SourceString dartMethodName = const SourceString("concat");
-    if (!builder.methodInterceptionEnabled) {
-      builder.compiler.internalError(
-        "Using string interpolations in non-intercepted code.",
-        instruction: right);
-    }
-    Element interceptor =
-        builder.interceptors.getTypedInterceptor(HType.STRING, dartMethodName, 1);
-    if (interceptor === null) {
-      builder.compiler.internalError(
-          "concat not intercepted.", instruction: left);
-    }
-    HStatic target = new HStatic(interceptor);
+  HInstruction buildConcat(HInstruction left, HInstruction right) {
+    HStatic target = new HStatic(stringConcat);
     builder.add(target);
-    builder.push(new HInvokeInterceptor(Selector.INVOCATION_1,
-                                        dartMethodName,
-                                        false,
-                                        <HInstruction>[target, left, right],
-                                        HType.STRING));
+    builder.push(new HAdd(target, left, right));
     return builder.pop();
   }
 
   HInstruction buildToString(Node node, HInstruction input) {
-    SourceString dartMethodName = const SourceString("toString");
-    if (!builder.methodInterceptionEnabled) {
-      builder.compiler.internalError(
-        "Using string interpolations in non-intercepted code.", node: node);
-    }
-    Element interceptor = builder.interceptors.getTypedInterceptor(
-        HType.STRING, dartMethodName, 0);
-    if (interceptor === null) {
-      builder.compiler.internalError(
-        "toString not intercepted.", node: node);
-    }
-    HStatic target = new HStatic(interceptor);
+    HStatic target = new HStatic(stringToString);
     builder.add(target);
-    builder.push(new HInvokeInterceptor(Selector.INVOCATION_0,
-                                        dartMethodName,
-                                        false,
-                                        <HInstruction>[target, input],
-                                        HType.STRING));
+    builder.push(new HInvokeStatic(Selector.INVOCATION_1,
+                                   <HInstruction>[target, input],
+                                   HType.STRING));
     return builder.pop();
   }
 

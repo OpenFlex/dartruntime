@@ -102,7 +102,6 @@ _wrap(raw) {
     case 'BeforeLoadEvent': return new _BeforeLoadEventImpl._wrap(domObject);
     case 'BiquadFilterNode': return new _BiquadFilterNodeImpl._wrap(domObject);
     case 'Blob': return new _BlobImpl._wrap(domObject);
-    case 'WebKitBlobBuilder': return new _BlobBuilderImpl._wrap(domObject);
     case 'HTMLBodyElement': return new _BodyElementImpl._wrap(domObject);
     case 'HTMLButtonElement': return new _ButtonElementImpl._wrap(domObject);
     case 'CharacterData': return new _CharacterDataImpl._wrap(domObject);
@@ -590,6 +589,12 @@ _wrap(raw) {
       throw 'Unrecognized object $domObject. Name=${domObject.typeName}';
   }
 }
+
+spawnDomIsolate(Window targetWindow, String entryPoint) =>
+  dom.spawnDomIsolate(_unwrap(targetWindow), entryPoint);
+
+dom.LayoutTestController get layoutTestController() =>
+  dom.layoutTestController;
 
 class _AbstractWorkerImpl extends _EventTargetImpl implements AbstractWorker {
   _AbstractWorkerImpl._wrap(ptr) : super._wrap(ptr);
@@ -1447,45 +1452,6 @@ class _BlobImpl extends _DOMTypeBase implements Blob {
       }
     }
     throw "Incorrect number or type of arguments";
-  }
-}
-
-class _BlobBuilderImpl extends _DOMTypeBase implements BlobBuilder {
-  _BlobBuilderImpl._wrap(ptr) : super._wrap(ptr);
-
-  void append(arrayBuffer_OR_blob_OR_value, [String endings = null]) {
-    if (arrayBuffer_OR_blob_OR_value is Blob) {
-      if (endings === null) {
-        _ptr.append(_unwrap(arrayBuffer_OR_blob_OR_value));
-        return;
-      }
-    } else {
-      if (arrayBuffer_OR_blob_OR_value is ArrayBuffer) {
-        if (endings === null) {
-          _ptr.append(_unwrap(arrayBuffer_OR_blob_OR_value));
-          return;
-        }
-      } else {
-        if (arrayBuffer_OR_blob_OR_value is String) {
-          if (endings === null) {
-            _ptr.append(_unwrap(arrayBuffer_OR_blob_OR_value));
-            return;
-          } else {
-            _ptr.append(_unwrap(arrayBuffer_OR_blob_OR_value), _unwrap(endings));
-            return;
-          }
-        }
-      }
-    }
-    throw "Incorrect number or type of arguments";
-  }
-
-  Blob getBlob([String contentType = null]) {
-    if (contentType === null) {
-      return _wrap(_ptr.getBlob());
-    } else {
-      return _wrap(_ptr.getBlob(_unwrap(contentType)));
-    }
   }
 }
 
@@ -6305,22 +6271,6 @@ class _DOMTokenListImpl extends _DOMTypeBase implements DOMTokenList {
 
 class _DOMURLImpl extends _DOMTypeBase implements DOMURL {
   _DOMURLImpl._wrap(ptr) : super._wrap(ptr);
-
-  String createObjectURL(blob_OR_stream) {
-    if (blob_OR_stream is MediaStream) {
-      return _wrap(_ptr.createObjectURL(_unwrap(blob_OR_stream)));
-    } else {
-      if (blob_OR_stream is Blob) {
-        return _wrap(_ptr.createObjectURL(_unwrap(blob_OR_stream)));
-      }
-    }
-    throw "Incorrect number or type of arguments";
-  }
-
-  void revokeObjectURL(String url) {
-    _ptr.revokeObjectURL(_unwrap(url));
-    return;
-  }
 }
 
 class _DataTransferItemImpl extends _DOMTypeBase implements DataTransferItem {
@@ -9319,6 +9269,88 @@ class _FileListImpl extends _DOMTypeBase implements FileList {
 
   int get length() => _wrap(_ptr.length);
 
+  File operator[](int index) => _wrap(_ptr[index]);
+
+  void operator[]=(int index, File value) {
+    throw new UnsupportedOperationException("Cannot assign element of immutable List.");
+  }
+  // -- start List<File> mixins.
+  // File is the element type.
+
+  // From Iterable<File>:
+
+  Iterator<File> iterator() {
+    // Note: NodeLists are not fixed size. And most probably length shouldn't
+    // be cached in both iterator _and_ forEach method. For now caching it
+    // for consistency.
+    return new _FixedSizeListIterator<File>(this);
+  }
+
+  // From Collection<File>:
+
+  void add(File value) {
+    throw new UnsupportedOperationException("Cannot add to immutable List.");
+  }
+
+  void addLast(File value) {
+    throw new UnsupportedOperationException("Cannot add to immutable List.");
+  }
+
+  void addAll(Collection<File> collection) {
+    throw new UnsupportedOperationException("Cannot add to immutable List.");
+  }
+
+  void forEach(void f(File element)) => _Collections.forEach(this, f);
+
+  Collection map(f(File element)) => _Collections.map(this, [], f);
+
+  Collection<File> filter(bool f(File element)) =>
+     _Collections.filter(this, <File>[], f);
+
+  bool every(bool f(File element)) => _Collections.every(this, f);
+
+  bool some(bool f(File element)) => _Collections.some(this, f);
+
+  bool isEmpty() => this.length == 0;
+
+  // From List<File>:
+
+  void sort(int compare(File a, File b)) {
+    throw new UnsupportedOperationException("Cannot sort immutable List.");
+  }
+
+  int indexOf(File element, [int start = 0]) =>
+      _Lists.indexOf(this, element, start, this.length);
+
+  int lastIndexOf(File element, [int start]) {
+    if (start === null) start = length - 1;
+    return _Lists.lastIndexOf(this, element, start);
+  }
+
+  File last() => this[length - 1];
+
+  File removeLast() {
+    throw new UnsupportedOperationException("Cannot removeLast on immutable List.");
+  }
+
+  // FIXME: implement these.
+  void setRange(int start, int rangeLength, List<File> from, [int startFrom]) {
+    throw new UnsupportedOperationException("Cannot setRange on immutable List.");
+  }
+
+  void removeRange(int start, int rangeLength) {
+    throw new UnsupportedOperationException("Cannot removeRange on immutable List.");
+  }
+
+  void insertRange(int start, int rangeLength, [File initialValue]) {
+    throw new UnsupportedOperationException("Cannot insertRange on immutable List.");
+  }
+
+  List<File> getRange(int start, int rangeLength) =>
+      _Lists.getRange(this, start, rangeLength, <File>[]);
+
+  // -- end List<File> mixins.
+
   File item(int index) {
     return _wrap(_ptr.item(_unwrap(index)));
   }
@@ -10193,6 +10225,11 @@ class _IDBCursorImpl extends _DOMTypeBase implements IDBCursor {
 
   Dynamic get source() => _wrap(_ptr.source);
 
+  void advance(int count) {
+    _ptr.advance(_unwrap(count));
+    return;
+  }
+
   void continueFunction([/*IDBKey*/ key = null]) {
     if (key === null) {
       _ptr.continueFunction();
@@ -10383,31 +10420,47 @@ class _IDBIndexImpl extends _DOMTypeBase implements IDBIndex {
     }
   }
 
-  IDBRequest openCursor([IDBKeyRange range = null, int direction = null]) {
-    if (range === null) {
+  IDBRequest openCursor([key_OR_range = null, int direction = null]) {
+    if (key_OR_range === null) {
       if (direction === null) {
         return _wrap(_ptr.openCursor());
       }
     } else {
-      if (direction === null) {
-        return _wrap(_ptr.openCursor(_unwrap(range)));
+      if (key_OR_range is IDBKeyRange) {
+        if (direction === null) {
+          return _wrap(_ptr.openCursor(_unwrap(key_OR_range)));
+        } else {
+          return _wrap(_ptr.openCursor(_unwrap(key_OR_range), _unwrap(direction)));
+        }
       } else {
-        return _wrap(_ptr.openCursor(_unwrap(range), _unwrap(direction)));
+        if (direction === null) {
+          return _wrap(_ptr.openCursor(_unwrap(key_OR_range)));
+        } else {
+          return _wrap(_ptr.openCursor(_unwrap(key_OR_range), _unwrap(direction)));
+        }
       }
     }
     throw "Incorrect number or type of arguments";
   }
 
-  IDBRequest openKeyCursor([IDBKeyRange range = null, int direction = null]) {
-    if (range === null) {
+  IDBRequest openKeyCursor([key_OR_range = null, int direction = null]) {
+    if (key_OR_range === null) {
       if (direction === null) {
         return _wrap(_ptr.openKeyCursor());
       }
     } else {
-      if (direction === null) {
-        return _wrap(_ptr.openKeyCursor(_unwrap(range)));
+      if (key_OR_range is IDBKeyRange) {
+        if (direction === null) {
+          return _wrap(_ptr.openKeyCursor(_unwrap(key_OR_range)));
+        } else {
+          return _wrap(_ptr.openKeyCursor(_unwrap(key_OR_range), _unwrap(direction)));
+        }
       } else {
-        return _wrap(_ptr.openKeyCursor(_unwrap(range), _unwrap(direction)));
+        if (direction === null) {
+          return _wrap(_ptr.openKeyCursor(_unwrap(key_OR_range)));
+        } else {
+          return _wrap(_ptr.openKeyCursor(_unwrap(key_OR_range), _unwrap(direction)));
+        }
       }
     }
     throw "Incorrect number or type of arguments";
@@ -10498,19 +10551,20 @@ class _IDBObjectStoreImpl extends _DOMTypeBase implements IDBObjectStore {
     return _wrap(_ptr.index(_unwrap(name)));
   }
 
-  IDBRequest openCursor([IDBKeyRange range = null, int direction = null]) {
-    if (range === null) {
+  IDBRequest openCursor([key_OR_range = null, int direction = null]) {
+    if (key_OR_range is IDBKeyRange) {
       if (direction === null) {
-        return _wrap(_ptr.openCursor());
+        return _wrap(_ptr.openCursor(_unwrap(key_OR_range)));
+      } else {
+        return _wrap(_ptr.openCursor(_unwrap(key_OR_range), _unwrap(direction)));
       }
     } else {
       if (direction === null) {
-        return _wrap(_ptr.openCursor(_unwrap(range)));
+        return _wrap(_ptr.openCursor(_unwrap(key_OR_range)));
       } else {
-        return _wrap(_ptr.openCursor(_unwrap(range), _unwrap(direction)));
+        return _wrap(_ptr.openCursor(_unwrap(key_OR_range), _unwrap(direction)));
       }
     }
-    throw "Incorrect number or type of arguments";
   }
 
   IDBRequest put(/*SerializedScriptValue*/ value, [/*IDBKey*/ key = null]) {
@@ -11965,11 +12019,6 @@ class _MediaElementImpl extends _ElementImpl implements MediaElement {
     }
   }
 
-  void webkitSourceAddId(String id, String type) {
-    _ptr.webkitSourceAddId(_unwrap(id), _unwrap(type));
-    return;
-  }
-
   void webkitSourceAppend(Uint8Array data) {
     _ptr.webkitSourceAppend(_unwrap(data));
     return;
@@ -11977,11 +12026,6 @@ class _MediaElementImpl extends _ElementImpl implements MediaElement {
 
   void webkitSourceEndOfStream(int status) {
     _ptr.webkitSourceEndOfStream(_unwrap(status));
-    return;
-  }
-
-  void webkitSourceRemoveId(String id) {
-    _ptr.webkitSourceRemoveId(_unwrap(id));
     return;
   }
 }
@@ -12700,7 +12744,7 @@ class _NavigatorImpl extends _DOMTypeBase implements Navigator {
     return;
   }
 
-  void webkitGetUserMedia(String options, NavigatorUserMediaSuccessCallback successCallback, [NavigatorUserMediaErrorCallback errorCallback = null]) {
+  void webkitGetUserMedia(Map options, NavigatorUserMediaSuccessCallback successCallback, [NavigatorUserMediaErrorCallback errorCallback = null]) {
     if (errorCallback === null) {
       _ptr.webkitGetUserMedia(_unwrap(options), _unwrap(successCallback));
       return;
@@ -13642,6 +13686,10 @@ class _PerformanceImpl extends _DOMTypeBase implements Performance {
   PerformanceNavigation get navigation() => _wrap(_ptr.navigation);
 
   PerformanceTiming get timing() => _wrap(_ptr.timing);
+
+  num webkitNow() {
+    return _wrap(_ptr.webkitNow());
+  }
 }
 
 class _PerformanceNavigationImpl extends _DOMTypeBase implements PerformanceNavigation {
@@ -14095,7 +14143,7 @@ class _SVGAElementImpl extends _SVGElementImpl implements SVGAElement {
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -14397,7 +14445,7 @@ class _SVGCircleElementImpl extends _SVGElementImpl implements SVGCircleElement 
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -14465,7 +14513,7 @@ class _SVGClipPathElementImpl extends _SVGElementImpl implements SVGClipPathElem
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -14600,7 +14648,7 @@ class _SVGDefsElementImpl extends _SVGElementImpl implements SVGDefsElement {
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -14650,7 +14698,7 @@ class _SVGDescElementImpl extends _SVGElementImpl implements SVGDescElement {
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -14918,7 +14966,7 @@ class _SVGEllipseElementImpl extends _SVGElementImpl implements SVGEllipseElemen
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -14996,7 +15044,7 @@ class _SVGFEBlendElementImpl extends _SVGElementImpl implements SVGFEBlendElemen
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15028,7 +15076,7 @@ class _SVGFEColorMatrixElementImpl extends _SVGElementImpl implements SVGFEColor
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15056,7 +15104,7 @@ class _SVGFEComponentTransferElementImpl extends _SVGElementImpl implements SVGF
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15096,7 +15144,7 @@ class _SVGFECompositeElementImpl extends _SVGElementImpl implements SVGFEComposi
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15146,7 +15194,7 @@ class _SVGFEConvolveMatrixElementImpl extends _SVGElementImpl implements SVGFECo
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15182,7 +15230,7 @@ class _SVGFEDiffuseLightingElementImpl extends _SVGElementImpl implements SVGFED
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15218,7 +15266,7 @@ class _SVGFEDisplacementMapElementImpl extends _SVGElementImpl implements SVGFED
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15267,7 +15315,7 @@ class _SVGFEDropShadowElementImpl extends _SVGElementImpl implements SVGFEDropSh
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15293,7 +15341,7 @@ class _SVGFEFloodElementImpl extends _SVGElementImpl implements SVGFEFloodElemen
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15346,7 +15394,7 @@ class _SVGFEGaussianBlurElementImpl extends _SVGElementImpl implements SVGFEGaus
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15392,7 +15440,7 @@ class _SVGFEImageElementImpl extends _SVGElementImpl implements SVGFEImageElemen
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15418,7 +15466,7 @@ class _SVGFEMergeElementImpl extends _SVGElementImpl implements SVGFEMergeElemen
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15463,7 +15511,7 @@ class _SVGFEMorphologyElementImpl extends _SVGElementImpl implements SVGFEMorpho
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15495,7 +15543,7 @@ class _SVGFEOffsetElementImpl extends _SVGElementImpl implements SVGFEOffsetElem
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15539,7 +15587,7 @@ class _SVGFESpecularLightingElementImpl extends _SVGElementImpl implements SVGFE
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15587,7 +15635,7 @@ class _SVGFETileElementImpl extends _SVGElementImpl implements SVGFETileElement 
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15625,7 +15673,7 @@ class _SVGFETurbulenceElementImpl extends _SVGElementImpl implements SVGFETurbul
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15678,7 +15726,7 @@ class _SVGFilterElementImpl extends _SVGElementImpl implements SVGFilterElement 
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15772,7 +15820,7 @@ class _SVGForeignObjectElementImpl extends _SVGElementImpl implements SVGForeign
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15838,7 +15886,7 @@ class _SVGGElementImpl extends _SVGElementImpl implements SVGGElement {
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15910,7 +15958,7 @@ class _SVGGlyphRefElementImpl extends _SVGElementImpl implements SVGGlyphRefElem
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15938,7 +15986,7 @@ class _SVGGradientElementImpl extends _SVGElementImpl implements SVGGradientElem
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -15996,7 +16044,7 @@ class _SVGImageElementImpl extends _SVGElementImpl implements SVGImageElement {
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -16145,7 +16193,7 @@ class _SVGLineElementImpl extends _SVGElementImpl implements SVGLineElement {
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -16271,7 +16319,7 @@ class _SVGMarkerElementImpl extends _SVGElementImpl implements SVGMarkerElement 
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -16329,7 +16377,7 @@ class _SVGMaskElementImpl extends _SVGElementImpl implements SVGMaskElement {
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -16608,7 +16656,7 @@ class _SVGPathElementImpl extends _SVGElementImpl implements SVGPathElement {
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -17043,7 +17091,7 @@ class _SVGPatternElementImpl extends _SVGElementImpl implements SVGPatternElemen
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -17144,7 +17192,7 @@ class _SVGPolygonElementImpl extends _SVGElementImpl implements SVGPolygonElemen
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -17214,7 +17262,7 @@ class _SVGPolylineElementImpl extends _SVGElementImpl implements SVGPolylineElem
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -17338,7 +17386,7 @@ class _SVGRectElementImpl extends _SVGElementImpl implements SVGRectElement {
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -17543,7 +17591,7 @@ class _SVGSVGElementImpl extends _SVGElementImpl implements SVGSVGElement {
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -17613,7 +17661,7 @@ class _SVGStopElementImpl extends _SVGElementImpl implements SVGStopElement {
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -17730,7 +17778,7 @@ class _SVGSwitchElementImpl extends _SVGElementImpl implements SVGSwitchElement 
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -17784,7 +17832,7 @@ class _SVGSymbolElementImpl extends _SVGElementImpl implements SVGSymbolElement 
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -17897,7 +17945,7 @@ class _SVGTextContentElementImpl extends _SVGElementImpl implements SVGTextConte
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -17979,7 +18027,7 @@ class _SVGTitleElementImpl extends _SVGElementImpl implements SVGTitleElement {
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -18134,7 +18182,7 @@ class _SVGUseElementImpl extends _SVGElementImpl implements SVGUseElement {
 
   // From SVGStylable
 
-  SVGAnimatedString get $dom_$dom_svgClassName() => _wrap(_ptr.className);
+  SVGAnimatedString get $dom_svgClassName() => _wrap(_ptr.className);
 
   CSSStyleDeclaration get style() => _wrap(_ptr.style);
 
@@ -19137,6 +19185,10 @@ class _TableElementImpl extends _ElementImpl implements TableElement {
 
   Element createCaption() {
     return _wrap(_ptr.createCaption());
+  }
+
+  Element createTBody() {
+    return _wrap(_ptr.createTBody());
   }
 
   Element createTFoot() {
@@ -20197,6 +20249,88 @@ class _Uint8ClampedArrayImpl extends _Uint8ArrayImpl implements Uint8ClampedArra
 
   int get length() => _wrap(_ptr.length);
 
+  int operator[](int index) => _wrap(_ptr[index]);
+
+  void operator[]=(int index, int value) {
+    return _ptr[index] = _unwrap(value);
+  }
+  // -- start List<int> mixins.
+  // int is the element type.
+
+  // From Iterable<int>:
+
+  Iterator<int> iterator() {
+    // Note: NodeLists are not fixed size. And most probably length shouldn't
+    // be cached in both iterator _and_ forEach method. For now caching it
+    // for consistency.
+    return new _FixedSizeListIterator<int>(this);
+  }
+
+  // From Collection<int>:
+
+  void add(int value) {
+    throw new UnsupportedOperationException("Cannot add to immutable List.");
+  }
+
+  void addLast(int value) {
+    throw new UnsupportedOperationException("Cannot add to immutable List.");
+  }
+
+  void addAll(Collection<int> collection) {
+    throw new UnsupportedOperationException("Cannot add to immutable List.");
+  }
+
+  void forEach(void f(int element)) => _Collections.forEach(this, f);
+
+  Collection map(f(int element)) => _Collections.map(this, [], f);
+
+  Collection<int> filter(bool f(int element)) =>
+     _Collections.filter(this, <int>[], f);
+
+  bool every(bool f(int element)) => _Collections.every(this, f);
+
+  bool some(bool f(int element)) => _Collections.some(this, f);
+
+  bool isEmpty() => this.length == 0;
+
+  // From List<int>:
+
+  void sort(int compare(int a, int b)) {
+    throw new UnsupportedOperationException("Cannot sort immutable List.");
+  }
+
+  int indexOf(int element, [int start = 0]) =>
+      _Lists.indexOf(this, element, start, this.length);
+
+  int lastIndexOf(int element, [int start]) {
+    if (start === null) start = length - 1;
+    return _Lists.lastIndexOf(this, element, start);
+  }
+
+  int last() => this[length - 1];
+
+  int removeLast() {
+    throw new UnsupportedOperationException("Cannot removeLast on immutable List.");
+  }
+
+  // FIXME: implement these.
+  void setRange(int start, int rangeLength, List<int> from, [int startFrom]) {
+    throw new UnsupportedOperationException("Cannot setRange on immutable List.");
+  }
+
+  void removeRange(int start, int rangeLength) {
+    throw new UnsupportedOperationException("Cannot removeRange on immutable List.");
+  }
+
+  void insertRange(int start, int rangeLength, [int initialValue]) {
+    throw new UnsupportedOperationException("Cannot insertRange on immutable List.");
+  }
+
+  List<int> getRange(int start, int rangeLength) =>
+      _Lists.getRange(this, start, rangeLength, <int>[]);
+
+  // -- end List<int> mixins.
+
   void setElements(Object array, [int offset = null]) {
     if (offset === null) {
       _ptr.setElements(_unwrap(array));
@@ -20214,6 +20348,14 @@ class _Uint8ClampedArrayImpl extends _Uint8ArrayImpl implements Uint8ClampedArra
       return _wrap(_ptr.subarray(_unwrap(start), _unwrap(end)));
     }
   }
+
+  // From ArrayBufferView
+
+  ArrayBuffer get buffer() => _wrap(_ptr.buffer);
+
+  int get byteLength() => _wrap(_ptr.byteLength);
+
+  int get byteOffset() => _wrap(_ptr.byteOffset);
 }
 
 class _UnknownElementImpl extends _ElementImpl implements UnknownElement {
@@ -22454,14 +22596,6 @@ class _AudioElementFactoryProvider {
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
 
-class _BlobBuilderFactoryProvider {
-  factory BlobBuilder() =>
-      _wrap(new dom.WebKitBlobBuilder());
-}
-// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
-// for details. All rights reserved. Use of this source code is governed by a
-// BSD-style license that can be found in the LICENSE file.
-
 class _CSSMatrixFactoryProvider {
   factory CSSMatrix([String cssValue = '']) =>
       _wrap(new dom.WebKitCSSMatrix(cssValue));
@@ -22641,9 +22775,9 @@ class _WorkerFactoryProvider {
 class _XMLHttpRequestFactoryProvider {
   factory XMLHttpRequest() => _wrap(new dom.XMLHttpRequest());
 
-  factory XMLHttpRequest.getTEMPNAME(String url,
+  factory XMLHttpRequest.get(String url,
                                      onSuccess(XMLHttpRequest request)) =>
-      _XMLHttpRequestUtils.getTEMPNAME(url, onSuccess);
+      _XMLHttpRequestUtils.get(url, onSuccess);
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -23581,23 +23715,6 @@ interface Blob {
 
   /** @domName Blob.webkitSlice */
   Blob webkitSlice([int start, int end, String contentType]);
-}
-// Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
-// for details. All rights reserved. Use of this source code is governed by a
-// BSD-style license that can be found in the LICENSE file.
-
-// WARNING: Do not edit - generated code.
-
-/// @domName WebKitBlobBuilder
-interface BlobBuilder default _BlobBuilderFactoryProvider {
-
-  BlobBuilder();
-
-  /** @domName WebKitBlobBuilder.append */
-  void append(arrayBuffer_OR_blob_OR_value, [String endings]);
-
-  /** @domName WebKitBlobBuilder.getBlob */
-  Blob getBlob([String contentType]);
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -27183,12 +27300,6 @@ interface DOMTokenList {
 interface DOMURL default _DOMURLFactoryProvider {
 
   DOMURL();
-
-  /** @domName DOMURL.createObjectURL */
-  String createObjectURL(blob_OR_stream);
-
-  /** @domName DOMURL.revokeObjectURL */
-  void revokeObjectURL(String url);
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -28969,7 +29080,7 @@ interface FileException {
 // WARNING: Do not edit - generated code.
 
 /// @domName FileList
-interface FileList {
+interface FileList extends List<File> {
 
   /** @domName FileList.length */
   final int length;
@@ -29624,6 +29735,9 @@ interface IDBCursor {
   /** @domName IDBCursor.source */
   final Dynamic source;
 
+  /** @domName IDBCursor.advance */
+  void advance(int count);
+
   /** @domName IDBCursor.continueFunction */
   void continueFunction([/*IDBKey*/ key]);
 
@@ -29803,10 +29917,10 @@ interface IDBIndex {
   IDBRequest getKey(key);
 
   /** @domName IDBIndex.openCursor */
-  IDBRequest openCursor([IDBKeyRange range, int direction]);
+  IDBRequest openCursor([key_OR_range, int direction]);
 
   /** @domName IDBIndex.openKeyCursor */
-  IDBRequest openKeyCursor([IDBKeyRange range, int direction]);
+  IDBRequest openKeyCursor([key_OR_range, int direction]);
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -29824,7 +29938,29 @@ interface IDBKey {
 // WARNING: Do not edit - generated code.
 
 /// @domName IDBKeyRange
-interface IDBKeyRange {
+interface IDBKeyRange default _IDBKeyRangeFactoryProvider {
+
+  /**
+   * @domName IDBKeyRange.only
+   */
+  IDBKeyRange.only(/*IDBKey*/ value);
+
+  /**
+   * @domName IDBKeyRange.lowerBound
+   */
+  IDBKeyRange.lowerBound(/*IDBKey*/ bound, [bool open]);
+
+  /**
+   * @domName IDBKeyRange.upperBound
+   */
+  IDBKeyRange.upperBound(/*IDBKey*/ bound, [bool open]);
+
+  /**
+   * @domName IDBKeyRange.bound
+   */
+  IDBKeyRange.bound(/*IDBKey*/ lower, /*IDBKey*/ upper,
+                    [bool lowerOpen, bool upperOpen]);
+
 
   /** @domName IDBKeyRange.lower */
   final Dynamic lower;
@@ -29884,7 +30020,7 @@ interface IDBObjectStore {
   IDBIndex index(String name);
 
   /** @domName IDBObjectStore.openCursor */
-  IDBRequest openCursor([IDBKeyRange range, int direction]);
+  IDBRequest openCursor([key_OR_range, int direction]);
 
   /** @domName IDBObjectStore.put */
   IDBRequest put(/*SerializedScriptValue*/ value, [/*IDBKey*/ key]);
@@ -31028,17 +31164,11 @@ interface MediaElement extends Element {
   /** @domName HTMLMediaElement.webkitGenerateKeyRequest */
   void webkitGenerateKeyRequest(String keySystem, [Uint8Array initData]);
 
-  /** @domName HTMLMediaElement.webkitSourceAddId */
-  void webkitSourceAddId(String id, String type);
-
   /** @domName HTMLMediaElement.webkitSourceAppend */
   void webkitSourceAppend(Uint8Array data);
 
   /** @domName HTMLMediaElement.webkitSourceEndOfStream */
   void webkitSourceEndOfStream(int status);
-
-  /** @domName HTMLMediaElement.webkitSourceRemoveId */
-  void webkitSourceRemoveId(String id);
 }
 
 interface MediaElementEvents extends ElementEvents {
@@ -31763,7 +31893,7 @@ interface Navigator {
   void registerProtocolHandler(String scheme, String url, String title);
 
   /** @domName Navigator.webkitGetUserMedia */
-  void webkitGetUserMedia(String options, NavigatorUserMediaSuccessCallback successCallback, [NavigatorUserMediaErrorCallback errorCallback]);
+  void webkitGetUserMedia(Map options, NavigatorUserMediaSuccessCallback successCallback, [NavigatorUserMediaErrorCallback errorCallback]);
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -32606,6 +32736,9 @@ interface Performance {
 
   /** @domName Performance.timing */
   final PerformanceTiming timing;
+
+  /** @domName Performance.webkitNow */
+  num webkitNow();
 }
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
@@ -33089,7 +33222,7 @@ interface Rect {
 
 // WARNING: Do not edit - generated code.
 
-typedef bool RequestAnimationFrameCallback(int time);
+typedef bool RequestAnimationFrameCallback(num highResTime);
 // Copyright (c) 2012, the Dart project authors.  Please see the AUTHORS file
 // for details. All rights reserved. Use of this source code is governed by a
 // BSD-style license that can be found in the LICENSE file.
@@ -37475,6 +37608,9 @@ interface TableElement extends Element {
   /** @domName HTMLTableElement.createCaption */
   Element createCaption();
 
+  /** @domName HTMLTableElement.createTBody */
+  Element createTBody();
+
   /** @domName HTMLTableElement.createTFoot */
   Element createTFoot();
 
@@ -38256,7 +38392,7 @@ interface Uint8Array extends ArrayBufferView, List<int> default _TypedArrayFacto
 // WARNING: Do not edit - generated code.
 
 /// @domName Uint8ClampedArray
-interface Uint8ClampedArray extends Uint8Array default _TypedArrayFactoryProvider {
+interface Uint8ClampedArray extends Uint8Array, List<int>, ArrayBufferView default _TypedArrayFactoryProvider {
 
   Uint8ClampedArray(int length);
 
@@ -38936,8 +39072,6 @@ interface WebGLRenderingContext extends CanvasRenderingContext {
   static final int SCISSOR_BOX = 0x0C10;
 
   static final int SCISSOR_TEST = 0x0C11;
-
-  static final int SHADER_COMPILER = 0x8DFA;
 
   static final int SHADER_TYPE = 0x8B4F;
 
@@ -40466,7 +40600,7 @@ interface WorkerNavigator {
 interface XMLHttpRequest extends EventTarget default _XMLHttpRequestFactoryProvider {
   // TODO(rnystrom): This name should just be "get" which is valid in Dart, but
   // not correctly implemented yet. (b/4970173)
-  XMLHttpRequest.getTEMPNAME(String url, onSuccess(XMLHttpRequest request));
+  XMLHttpRequest.get(String url, onSuccess(XMLHttpRequest request));
 
   XMLHttpRequest();
 
@@ -41442,9 +41576,9 @@ class _Collections {
 
 class _XMLHttpRequestUtils {
 
-  // Helper for factory XMLHttpRequest.getTEMPNAME
-  static XMLHttpRequest getTEMPNAME(String url,
-                                    onSuccess(XMLHttpRequest request)) {
+  // Helper for factory XMLHttpRequest.get
+  static XMLHttpRequest get(String url,
+                            onSuccess(XMLHttpRequest request)) {
     final request = new XMLHttpRequest();
     request.open('GET', url, true);
 
@@ -41576,6 +41710,23 @@ class _SVGSVGElementFactoryProvider {
 
 class _AudioContextFactoryProvider {
   factory AudioContext() => _wrap(new dom.AudioContext());
+}
+
+class _IDBKeyRangeFactoryProvider {
+
+  factory IDBKeyRange.only(/*IDBKey*/ value) =>
+      _wrap(new dom.IDBKeyRange.only(_unwrap(value)));
+
+  factory IDBKeyRange.lowerBound(/*IDBKey*/ bound, [bool open = false]) =>
+      _wrap(new dom.IDBKeyRange.lowerBound(_unwrap(bound), open));
+
+  factory IDBKeyRange.upperBound(/*IDBKey*/ bound, [bool open = false]) =>
+      _wrap(new dom.IDBKeyRange.upperBound(_unwrap(bound), open));
+
+  factory IDBKeyRange.bound(/*IDBKey*/ lower, /*IDBKey*/ upper,
+                            [bool lowerOpen = false, bool upperOpen = false]) =>
+      _wrap(new dom.IDBKeyRange.bound(_unwrap(lower), _unwrap(upper),
+                                      lowerOpen, upperOpen));
 }
 
 class _TypedArrayFactoryProvider {

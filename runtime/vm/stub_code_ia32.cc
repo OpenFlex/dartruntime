@@ -680,12 +680,15 @@ void StubCode::GenerateAllocateArrayStub(Assembler* assembler) {
       __ cmpl(ECX, Immediate(RawObject::SizeTag::kMaxSizeTag));
       __ j(ABOVE, &size_tag_overflow, Assembler::kNearJump);
       __ shll(ECX, Immediate(RawObject::kSizeTagBit - kObjectAlignmentLog2));
-      __ movl(FieldAddress(EAX, Array::tags_offset()), ECX);
       __ jmp(&done);
 
       __ Bind(&size_tag_overflow);
-      __ movl(FieldAddress(EAX, Array::tags_offset()), Immediate(0));
+      __ movl(ECX, Immediate(0));
       __ Bind(&done);
+
+      // Get the class index and insert it into the tags.
+      __ orl(ECX, Immediate(RawObject::ClassTag::encode(kArray)));
+      __ movl(FieldAddress(EAX, Array::tags_offset()), ECX);
     }
 
     // Initialize all array elements to raw_null.
@@ -1000,13 +1003,19 @@ void StubCode::GenerateAllocateContextStub(Assembler* assembler) {
       __ cmpl(EBX, Immediate(RawObject::SizeTag::kMaxSizeTag));
       __ j(ABOVE, &size_tag_overflow, Assembler::kNearJump);
       __ shll(EBX, Immediate(RawObject::kSizeTagBit - kObjectAlignmentLog2));
-      __ movl(FieldAddress(EAX, Context::tags_offset()), EBX);  // Tags.
       __ jmp(&done);
 
       __ Bind(&size_tag_overflow);
       // Set overflow size tag value.
-      __ movl(FieldAddress(EAX, Context::tags_offset()), Immediate(0));
+      __ movl(EBX, Immediate(0));
+
       __ Bind(&done);
+      // EAX: new object.
+      // EDX: number of context variables.
+      // EBX: size and bit tags.
+      __ orl(EBX,
+             Immediate(RawObject::ClassTag::encode(context_class.index())));
+      __ movl(FieldAddress(EAX, Context::tags_offset()), EBX);  // Tags.
     }
 
     // Setup up number of context variables field.
@@ -1139,12 +1148,15 @@ void StubCode::GenerateAllocationStubForClass(Assembler* assembler,
       __ movl(Address(ECX,
           InstantiatedTypeArguments::instantiator_type_arguments_offset()),
               EDX);
-      __ LoadObject(EDX,
-          Class::ZoneHandle(Object::instantiated_type_arguments_class()));
+      const Class& ita_cls =
+          Class::ZoneHandle(Object::instantiated_type_arguments_class());
+      __ LoadObject(EDX, ita_cls);
       __ movl(Address(ECX, Instance::class_offset()), EDX);  // Set its class.
       // Set the tags.
-      __ movl(Address(ECX, Instance::tags_offset()),
-              Immediate(RawObject::SizeTag::encode(type_args_size)));
+      uword tags = 0;
+      tags = RawObject::SizeTag::update(type_args_size, tags);
+      tags = RawObject::ClassTag::update(ita_cls.index(), tags);
+      __ movl(Address(ECX, Instance::tags_offset()), Immediate(tags));
       // Set the new InstantiatedTypeArguments object (ECX) as the type
       // arguments (EDI) of the new object (EAX).
       __ movl(EDI, ECX);
@@ -1163,8 +1175,11 @@ void StubCode::GenerateAllocationStubForClass(Assembler* assembler,
     __ LoadObject(EDX, cls);  // Load class of object to be allocated.
     __ movl(Address(EAX, Instance::class_offset()), EDX);
     // Set the tags.
-    __ movl(Address(EAX, Instance::tags_offset()),
-            Immediate(RawObject::SizeTag::encode(instance_size)));
+    uword tags = 0;
+    tags = RawObject::SizeTag::update(instance_size, tags);
+    ASSERT(cls.index() != kIllegalObjectKind);
+    tags = RawObject::ClassTag::update(cls.index(), tags);
+    __ movl(Address(EAX, Instance::tags_offset()), Immediate(tags));
 
     // Initialize the remaining words of the object.
     const Immediate raw_null =
@@ -1313,8 +1328,10 @@ void StubCode::GenerateAllocationStubForClosure(Assembler* assembler,
     __ LoadObject(EDX, cls);  // Load signature class of closure.
     __ movl(Address(EAX, Closure::class_offset()), EDX);
     // Set the tags.
-    __ movl(Address(EAX, Closure::tags_offset()),
-            Immediate(RawObject::SizeTag::encode(closure_size)));
+    uword tags = 0;
+    tags = RawObject::SizeTag::update(closure_size, tags);
+    tags = RawObject::ClassTag::update(cls.index(), tags);
+    __ movl(Address(EAX, Closure::tags_offset()), Immediate(tags));
 
     // Initialize the function field in the object.
     // EAX: new closure object.
@@ -1335,11 +1352,14 @@ void StubCode::GenerateAllocationStubForClosure(Assembler* assembler,
       // Initialize the new context capturing the receiver.
 
       // Set the class field to the Context class.
-      __ LoadObject(EBX, Class::ZoneHandle(Object::context_class()));
+      const Class& context_class = Class::ZoneHandle(Object::context_class());
+      __ LoadObject(EBX, context_class);
       __ movl(Address(ECX, Context::class_offset()), EBX);
       // Set the tags.
-      __ movl(Address(ECX, Context::tags_offset()),
-              Immediate(RawObject::SizeTag::encode(context_size)));
+      uword tags = 0;
+      tags = RawObject::SizeTag::update(context_size, tags);
+      tags = RawObject::ClassTag::update(context_class.index(), tags);
+      __ movl(Address(ECX, Context::tags_offset()), Immediate(tags));
 
       // Set number of variables field to 1 (for captured receiver).
       __ movl(Address(ECX, Context::num_variables_offset()), Immediate(1));
@@ -1504,7 +1524,7 @@ void StubCode::GenerateNArgsCheckInlineCacheStub(Assembler* assembler,
     __ cmpl(FieldAddress(EBX, Function::usage_counter_offset()),
         Immediate(FLAG_optimization_counter_threshold));
     Label not_yet_hot;
-    __ j(LESS_EQUAL, &not_yet_hot);
+    __ j(LESS_EQUAL, &not_yet_hot, Assembler::kNearJump);
     __ EnterFrame(0);
     __ pushl(ECX);  // Preserve inline cache data object.
     __ pushl(EDX);  // Preserve arguments array.
@@ -1730,136 +1750,112 @@ void StubCode::GenerateBreakpointDynamicStub(Assembler* assembler) {
 }
 
 
-// Check if an instance class is a subtype of class/interface using simple
-// superchain and interface array traversal. Does not take type parameters into
-// account.
-// Cannot handle Smi instances (must be tested beforehand).
-// EAX: instance (to be preserved).
-// ECX: class to test.
-// EDX: class/interface to test against (is class of instance a subtype of it).
-//      (preserved).
-// Result in EBX: 1 is subtype, 0 maybe not.
-// Destroys EBX, EDI, ECX.
-void StubCode::GenerateIsRawSubTypeStub(Assembler* assembler) {
-  const Immediate raw_null =
-      Immediate(reinterpret_cast<intptr_t>(Object::null()));
-  Label test_class, not_found, found;
-
-  __ movzxb(EBX, FieldAddress(EDX, Class::is_interface_offset()));
-  // Check if we are comparing against class or interface.
-  __ cmpl(EBX, Immediate(0));
-  __ j(EQUAL, &test_class, Assembler::kNearJump);
-
-  // Get interfaces array from instance class.
-  __ movl(EBX, FieldAddress(ECX, Class::interfaces_offset()));
-  __ cmpl(EBX, raw_null);
-  __ j(EQUAL, &not_found, Assembler::kNearJump);
-  __ movl(EDI, FieldAddress(EBX, Array::length_offset()));
-  // EDI: array index.
-  // EBX: interface array.
-  // EDX: interface searched
-  Label array_loop;
-  __ Bind(&array_loop);
-  __ subl(EDI, Immediate(Smi::RawValue(1)));
-  __ j(LESS, &not_found, Assembler::kNearJump);
-  // EDI is Smi therefore TIMES_2 instead of TIMES_4.
-  // Get type from array.
-  __ movl(ECX, FieldAddress(EBX, EDI, TIMES_2, Array::data_offset()));
-  __ movl(ECX, FieldAddress(ECX, Type::type_class_offset()));
-  __ cmpl(ECX, EDX);
-  __ j(EQUAL, &found, Assembler::kNearJump);
-  __ jmp(&array_loop, Assembler::kNearJump);
-
-  __ Bind(&not_found);
-  __ xorl(EBX, EBX);
-  __ ret();
-
-  __ Bind(&found);
-  __ movl(EBX, Immediate(1));
-  __ ret();
-
-  __ Bind(&test_class);
-  // EDX: test class.
-  __ cmpl(ECX, EDX);
-  __ j(EQUAL, &found, Assembler::kNearJump);
-
-  // Check superclasses using a loop (faster than runtime call).
-  Label super_loop;
-  __ Bind(&super_loop);
-  // ECX: class -> super.
-  __ movl(ECX, FieldAddress(ECX, Class::super_type_offset()));
-  // The supertype of Object is a null object.
-  __ cmpl(ECX, raw_null);
-  __ j(EQUAL, &not_found, Assembler::kNearJump);
-  __ movl(ECX, FieldAddress(ECX, Type::type_class_offset()));
-  __ cmpl(EDX, ECX);
-  __ j(NOT_EQUAL, &super_loop, Assembler::kNearJump);
-  __ jmp(&found, Assembler::kNearJump);
-}
-
-
 // Used to check class and type arguments. Arguments passed on stack:
-// TOS + 0: return address
-// TOS + 1: instantiator type arguments
-// TOS + 2: instance
-// TOS + 3: cache array.
-// Result in ECX: null -> not found, otherwise result.
-void StubCode::GenerateSubtypeTestCacheStub(Assembler* assembler) {
+// TOS + 0: return address.
+// TOS + 1: instantiator type arguments (can be NULL).
+// TOS + 2: instance.
+// TOS + 3: SubtypeTestCache.
+// Result in ECX: null -> not found, otherwise result (true or false).
+static void GenerateSubtypeNTestCacheStub(Assembler* assembler, int n) {
+  ASSERT((1 <= n) && (n <= 3));
   const intptr_t kInstantiatorTypeArgumentsInBytes = 1 * kWordSize;
   const intptr_t kInstanceOffsetInBytes = 2 * kWordSize;
-  const intptr_t kCacheArrayOffsetInBytes = 3 * kWordSize;
+  const intptr_t kCacheOffsetInBytes = 3 * kWordSize;
   const Immediate raw_null =
       Immediate(reinterpret_cast<intptr_t>(Object::null()));
-
+  Label not_found;
   __ movl(EAX, Address(ESP, kInstanceOffsetInBytes));
   __ movl(ECX, FieldAddress(EAX, Object::class_offset()));
   // EAX: instance, ECX: instance-class.
   // Get instance type arguments
-  Label has_no_type_arguments;
-  __ movl(EBX, raw_null);
-  __ movl(EDI, FieldAddress(ECX,
-      Class::type_arguments_instance_field_offset_offset()));
-  __ cmpl(EDI, Immediate(Class::kNoTypeArguments));
-  __ j(EQUAL, &has_no_type_arguments, Assembler::kNearJump);
-  __ movl(EBX, FieldAddress(EAX, EDI, TIMES_1, 0));
-  __ Bind(&has_no_type_arguments);
+  if (n > 1) {
+    // Compute instance type arguments into EBX.
+    Label has_no_type_arguments;
+    __ movl(EBX, raw_null);
+    __ movl(EDI, FieldAddress(ECX,
+        Class::type_arguments_instance_field_offset_offset()));
+    __ cmpl(EDI, Immediate(Class::kNoTypeArguments));
+    __ j(EQUAL, &has_no_type_arguments, Assembler::kNearJump);
+    __ movl(EBX, FieldAddress(EAX, EDI, TIMES_1, 0));
+    __ Bind(&has_no_type_arguments);
+  }
   // EBX: instance type arguments (null if none).
-  __ movl(EDX, Address(ESP, kCacheArrayOffsetInBytes));
-  // EDX: cache.
+  __ movl(EDX, Address(ESP, kCacheOffsetInBytes));
+  // EDX: SubtypeTestCache.
+  __ movl(EDX, FieldAddress(EDX, SubtypeTestCache::cache_offset()));
   __ addl(EDX, Immediate(Array::data_offset() - kHeapObjectTag));
-  Label loop, found, not_found, next_iteration;
+
+  Label loop, found, next_iteration;
   // EDX: Entry start.
   // ECX: instance class.
   // EBX: instance type arguments
-  // TOS + 2: test-type-class.
-  // TOS + 1: test-type-arguments.
   __ Bind(&loop);
-  __ movl(EDI, Address(EDX, kWordSize * SubTypeTestCache::kInstanceClass));
-  __ cmpl(EDI, ECX);
-  __ j(NOT_EQUAL, &next_iteration, Assembler::kNearJump);
-  __ movl(EDI,
-          Address(EDX, kWordSize * SubTypeTestCache::kInstanceTypeArguments));
-  __ cmpl(EDI, EBX);
-  __ j(NOT_EQUAL, &next_iteration, Assembler::kNearJump);
-  __ movl(EDI,
-          Address(EDX, kWordSize *
-                       SubTypeTestCache::kInstantiatorTypeArguments));
-  __ cmpl(EDI, Address(ESP, kInstantiatorTypeArgumentsInBytes));
-  __ j(EQUAL, &found, Assembler::kNearJump);
-
-  __ Bind(&next_iteration);
-  __ addl(EDX, Immediate(kWordSize * SubTypeTestCache::kNumEntries));
-  // Is loop done?
+  __ movl(EDI, Address(EDX, kWordSize * SubtypeTestCache::kInstanceClass));
   __ cmpl(EDI, raw_null);
-  __ j(NOT_EQUAL, &loop, Assembler::kNearJump);
+  __ j(EQUAL, &not_found, Assembler::kNearJump);
+  __ cmpl(EDI, ECX);
+  if (n == 1) {
+    __ j(EQUAL, &found, Assembler::kNearJump);
+  } else {
+    __ j(NOT_EQUAL, &next_iteration, Assembler::kNearJump);
+    __ movl(EDI,
+          Address(EDX, kWordSize * SubtypeTestCache::kInstanceTypeArguments));
+    __ cmpl(EDI, EBX);
+    if (n == 2) {
+      __ j(EQUAL, &found, Assembler::kNearJump);
+    } else {
+      __ j(NOT_EQUAL, &next_iteration, Assembler::kNearJump);
+      __ movl(EDI,
+              Address(EDX, kWordSize *
+                           SubtypeTestCache::kInstantiatorTypeArguments));
+      __ cmpl(EDI, Address(ESP, kInstantiatorTypeArgumentsInBytes));
+      __ j(EQUAL, &found, Assembler::kNearJump);
+    }
+  }
+  __ Bind(&next_iteration);
+  __ addl(EDX, Immediate(kWordSize * SubtypeTestCache::kTestEntryLength));
+  __ jmp(&loop, Assembler::kNearJump);
   // Fall through to not found.
   __ Bind(&not_found);
   __ movl(ECX, raw_null);
   __ ret();
 
   __ Bind(&found);
-  __ movl(ECX, Address(EDX, kWordSize * SubTypeTestCache::kTestResult));
+  __ movl(ECX, Address(EDX, kWordSize * SubtypeTestCache::kTestResult));
   __ ret();
+}
+
+
+// Used to check class and type arguments. Arguments passed on stack:
+// TOS + 0: return address.
+// TOS + 1: instantiator type arguments or NULL.
+// TOS + 2: instance.
+// TOS + 3: cache array.
+// Result in ECX: null -> not found, otherwise result (true or false).
+void StubCode::GenerateSubtype1TestCacheStub(Assembler* assembler) {
+  GenerateSubtypeNTestCacheStub(assembler, 1);
+}
+
+
+// Used to check class and type arguments. Arguments passed on stack:
+// TOS + 0: return address.
+// TOS + 1: instantiator type arguments or NULL.
+// TOS + 2: instance.
+// TOS + 3: cache array.
+// Result in ECX: null -> not found, otherwise result (true or false).
+void StubCode::GenerateSubtype2TestCacheStub(Assembler* assembler) {
+  GenerateSubtypeNTestCacheStub(assembler, 2);
+}
+
+
+// Used to check class and type arguments. Arguments passed on stack:
+// TOS + 0: return address.
+// TOS + 1: instantiator type arguments.
+// TOS + 2: instance.
+// TOS + 3: cache array.
+// Result in ECX: null -> not found, otherwise result (true or false).
+void StubCode::GenerateSubtype3TestCacheStub(Assembler* assembler) {
+  GenerateSubtypeNTestCacheStub(assembler, 3);
 }
 
 }  // namespace dart

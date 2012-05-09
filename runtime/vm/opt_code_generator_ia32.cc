@@ -241,7 +241,7 @@ OptimizingCodeGenerator::OptimizingCodeGenerator(
     Assembler* assembler, const ParsedFunction& parsed_function)
         : CodeGenerator(assembler, parsed_function),
           deoptimization_blobs_(4),
-          classes_for_locals_(new ClassesForLocals()),
+          classes_for_locals_(NULL),
           smi_class_(Class::ZoneHandle(Isolate::Current()->object_store()
               ->smi_class())),
           double_class_(Class::ZoneHandle(Isolate::Current()->object_store()
@@ -249,6 +249,12 @@ OptimizingCodeGenerator::OptimizingCodeGenerator(
           growable_object_array_class_(Class::ZoneHandle(Isolate::Current()
               ->object_store()->growable_object_array_class())) {
   ASSERT(parsed_function.function().is_optimizable());
+}
+
+
+void OptimizingCodeGenerator::InitGenerator() {
+  CodeGenerator::InitGenerator();
+  classes_for_locals_ = new ClassesForLocals();
 }
 
 
@@ -383,7 +389,10 @@ void OptimizingCodeGenerator::CallDeoptimize(intptr_t node_id,
 
 // Quick loads do not clobber registers.
 static bool IsQuickLoad(AstNode* node) {
-  return node->IsLoadLocalNode() || node->IsLiteralNode();
+  if (node->IsLoadLocalNode() && (!node->AsLoadLocalNode()->HasPseudo())) {
+    return true;
+  }
+  return node->IsLiteralNode();
 }
 
 
@@ -394,7 +403,7 @@ void OptimizingCodeGenerator::VisitLoadOne(AstNode* node, Register reg) {
     __ popl(reg);
     return;
   }
-  if (node->AsLoadLocalNode()) {
+  if (node->IsLoadLocalNode()) {
     LoadLocalNode* local_node = node->AsLoadLocalNode();
     ASSERT(local_node != NULL);
     GenerateLoadVariable(reg, local_node->local());
@@ -407,7 +416,7 @@ void OptimizingCodeGenerator::VisitLoadOne(AstNode* node, Register reg) {
     }
     return;
   }
-  if (node->AsLiteralNode()) {
+  if (node->IsLiteralNode()) {
     LiteralNode* literal_node = node->AsLiteralNode();
     ASSERT(literal_node != NULL);
     __ LoadObject(reg, literal_node->literal());
@@ -483,6 +492,10 @@ void OptimizingCodeGenerator::VisitLiteralNode(LiteralNode* node) {
 
 
 void OptimizingCodeGenerator::VisitLoadLocalNode(LoadLocalNode* node) {
+  if (node->HasPseudo()) {
+    node->pseudo()->Visit(this);
+    __ popl(EAX);
+  }
   if (!IsResultNeeded(node)) return;
   if (IsResultInEaxRequested(node)) {
     GenerateLoadVariable(EAX, node->local());
@@ -1346,184 +1359,6 @@ void OptimizingCodeGenerator::VisitBinaryOpNode(BinaryOpNode* node) {
   HandleResult(node, EAX);
   return;
 }
-
-
-// Optimized for Smi only.
-void OptimizingCodeGenerator::VisitIncrOpLocalNode(IncrOpLocalNode* node) {
-  if (FLAG_enable_type_checks) {
-    const AbstractType& local_type = node->local().type();
-    if (!local_type.IsNumberInterface() && !local_type.IsIntInterface()) {
-      // Local does not accept a Smi (only Smi's interfaces are public).
-      classes_for_locals_->SetLocalType(node->local(), Class::ZoneHandle());
-      CodeGenerator::VisitIncrOpLocalNode(node);
-      return;
-    }
-  }
-  const ICData& ic_data = node->ICDataAtId(node->id());
-  if (ic_data.NumberOfChecks() == 0) {
-    DeoptimizationBlob* deopt_blob =
-        AddDeoptimizationBlob(node, kDeoptNoTypeFeedback);
-    __ jmp(deopt_blob->label());
-    return;
-  }
-  const char* kOptMessage = "Inlines IncrOpLocal";
-  ASSERT((node->kind() == Token::kINCR) || (node->kind() == Token::kDECR));
-  if (!AtIdNodeHasClassAt(node, node->id(), smi_class_, 0)) {
-    classes_for_locals_->SetLocalType(node->local(), Class::ZoneHandle());
-    TraceNotOpt(node, kOptMessage);
-    CodeGenerator::VisitIncrOpLocalNode(node);
-    return;
-  }
-  TraceOpt(node, kOptMessage);
-
-  GenerateLoadVariable(EAX, node->local());
-  if (!node->prefix() && IsResultNeeded(node)) {
-    // Preserve as result.
-    __ movl(ECX, EAX);
-  }
-  const int int_value = (node->kind() == Token::kINCR) ? 1 : -1;
-  const Immediate smi_value =
-      Immediate(reinterpret_cast<int32_t>(Smi::New(int_value)));
-  DeoptimizationBlob* deopt_blob = AddDeoptimizationBlob(node, kDeoptIncrLocal);
-  __ testl(EAX, Immediate(kSmiTagMask));
-  __ j(NOT_ZERO, deopt_blob->label());
-  __ addl(EAX, smi_value);
-  __ j(OVERFLOW, deopt_blob->label());
-  GenerateStoreVariable(node->local(), EAX, EDX);
-  if (IsResultNeeded(node)) {
-    if (node->info() != NULL) {
-      node->info()->set_is_class(&smi_class_);
-    }
-    if (node->prefix()) {
-      __ pushl(EAX);
-    } else {
-      __ pushl(ECX);
-    }
-  }
-  classes_for_locals_->SetLocalType(node->local(), smi_class_);
-}
-
-
-// Debugging helper method, used in assert only.
-static bool HaveSameClassesInICData(const ICData& a, const ICData& b) {
-  if (a.NumberOfChecks() != b.NumberOfChecks()) {
-    return false;
-  }
-  if (a.NumberOfChecks() == 0) {
-    return true;
-  }
-  if (a.num_args_tested() != b.num_args_tested()) {
-    return false;
-  }
-  // Only one-argument checks implemented.
-  ASSERT(a.num_args_tested() == 1);
-  Function& a_target = Function::Handle();
-  Function& b_target = Function::Handle();
-  Class& a_class = Class::Handle();
-  Class& b_class = Class::Handle();
-  for (intptr_t i = 0; i < a.NumberOfChecks(); i++) {
-    a.GetOneClassCheckAt(i, &a_class, &a_target);
-    bool found = false;
-    for (intptr_t n = 0; n < b.NumberOfChecks(); n++) {
-      b.GetOneClassCheckAt(n, &b_class, &b_target);
-      if ((a_class.raw() == b_class.raw())) {
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      return false;
-    }
-  }
-  return true;
-}
-
-
-void OptimizingCodeGenerator::VisitIncrOpInstanceFieldNode(
-    IncrOpInstanceFieldNode* node) {
-  ASSERT((node->kind() == Token::kINCR) || (node->kind() == Token::kDECR));
-  VisitLoadOne(node->receiver(), EBX);
-  __ pushl(EBX);  // Duplicate receiver (preserve for setter).
-  const ICData& ic_data = node->ICDataAtId(node->id());
-  // Deoptimize if either this node has never been visited before or
-  // if the classes collected at getter and setter do not match (can happen
-  // if the increment is 'interrupted' by an exception).
-  if ((ic_data.NumberOfChecks() == 0) ||
-       !HaveSameClassesInICData(node->ICDataAtId(node->getter_id()),
-                                node->ICDataAtId(node->setter_id()))) {
-    // Deoptimization point for this node is after receiver has been
-    // pushed twice on stack and before the getter (above) was executed.
-    DeoptimizationBlob* deopt_blob =
-        AddDeoptimizationBlob(node, EBX, kDeoptIncrInstance);
-    __ jmp(deopt_blob->label());
-    return;
-  }
-  InlineInstanceGetter(node,
-                       node->getter_id(),
-                       node->receiver(),
-                       node->field_name(),
-                       EBX);
-  // result is in EAX.
-  __ popl(EDX);   // Get receiver.
-  const bool return_original_value = !node->prefix() && IsResultNeeded(node);
-  const Immediate one_value = Immediate(Smi::RawValue(1));
-  // EAX: Value.
-  // EDX: Receiver.
-  if (AtIdNodeHasClassAt(node, node->operator_id(), smi_class_, 0)) {
-    // Deoptimization point for this node is after receiver has been
-    // pushed twice on stack and before the getter (above) was executed.
-    DeoptimizationBlob* deopt_blob =
-        AddDeoptimizationBlob(node, EDX, EDX, kDeoptIncrInstanceOneClass);
-    if (return_original_value) {
-      // Preserve pre increment result.
-      __ movl(ECX, EAX);
-    }
-    __ testl(EAX, Immediate(kSmiTagMask));
-    __ j(NOT_ZERO, deopt_blob->label());
-    if (node->kind() == Token::kINCR) {
-      __ addl(EAX, one_value);
-    } else {
-      __ subl(EAX, one_value);
-    }
-    __ j(OVERFLOW, deopt_blob->label());
-    if (return_original_value) {
-      // Preserve as result.
-      __ pushl(ECX);  // Preserve pre-increment value as result.
-    }
-  } else {
-    if (return_original_value) {
-      // Preserve as result.
-      __ pushl(EAX);  // Preserve value as result.
-    }
-    __ pushl(EDX);  // Preserve receiver.
-    __ pushl(EAX);  // Left operand.
-    __ pushl(one_value);  // Right operand.
-    const char* operator_name = (node->kind() == Token::kINCR) ? "+" : "-";
-    GenerateBinaryOperatorCall(node->operator_id(),
-                               node->token_index(),
-                               operator_name);
-    __ popl(EDX);  // Restore receiver.
-  }
-  // EAX: Result of binary operation.
-  // EDX: receiver
-  if (IsResultNeeded(node) && node->prefix()) {
-    // Value stored into field is the result.
-    __ pushl(EAX);
-  }
-
-  // This can never deoptimize since the checks are the same as in getter.
-  ASSERT(HaveSameClassesInICData(node->ICDataAtId(node->getter_id()),
-                                 node->ICDataAtId(node->setter_id())));
-  InlineInstanceSetter(node,
-                       node->setter_id(),
-                       node->receiver(),
-                       node->field_name(),
-                       EDX,   // receiver
-                       EAX);  // value.
-}
-
-
-
 
 
 // Return offset of a field or -1 if field is not found.

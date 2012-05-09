@@ -20,7 +20,7 @@ class FlowGraphBuilder: public ValueObject {
  public:
   explicit FlowGraphBuilder(const ParsedFunction& parsed_function);
 
-  void BuildGraph();
+  void BuildGraph(bool for_optimized);
 
   const ParsedFunction& parsed_function() const { return parsed_function_; }
 
@@ -115,63 +115,36 @@ class EffectGraphVisitor : public AstNodeVisitor {
  protected:
   // Helpers for translating parts of the AST.
   void TranslateArgumentList(const ArgumentListNode& node,
-                             intptr_t next_temp_index,
                              ZoneGrowableArray<Value*>* values);
 
-  // Build the load part of a instance field increment.  Translates the
-  // receiver and loads the value.  The receiver will be returned in the
-  // output parameter 'receiver'.
-  Definition* BuildIncrOpFieldLoad(IncrOpInstanceFieldNode* node,
-                                   Value** receiver);
-
-  // Build the load part of an indexed increment.  Translates the receiver
-  // and index and loads the value.  The receiver will be returned in the
-  // output parameter 'receiver' and the index will be returned in the
-  // output parameter 'index'..
-  Definition* BuildIncrOpIndexedLoad(IncrOpIndexedNode* node,
-                                     Value** receiver,
-                                     Value** index);
-
-  // Build the increment part of an increment operation (add or subtract 1).
-  // Consumes the original value and produces the value +/- 1.
-  Definition* BuildIncrOpIncrement(Token::Kind kind,
-                                   intptr_t node_id,
-                                   intptr_t token_index,
-                                   Value* original);
-
-  // Creates an instantiated type argument vector used in preparation of a
-  // factory call.
+  // Creates an instantiated type argument vector used in preparation of an
+  // allocation call.
   // May be called only if allocating an object of a parameterized class.
-  Value* BuildFactoryTypeArguments(ConstructorCallNode* node,
-                                   intptr_t start_index);
+  Definition* BuildInstantiatedTypeArguments(
+      intptr_t token_index,
+      const AbstractTypeArguments& type_arguments);
 
   // Creates a possibly uninstantiated type argument vector and the type
   // argument vector of the instantiator (two values in 'args') used in
   // preparation of a constructor call.
   // May be called only if allocating an object of a parameterized class.
   void BuildConstructorTypeArguments(ConstructorCallNode* node,
-                                     intptr_t start_index,
                                      ZoneGrowableArray<Value*>* args);
 
   // Returns the value of the type arguments of the instantiator.
-  Value* BuildInstantiatorTypeArguments(intptr_t token_index,
-                                        intptr_t start_index);
+  Value* BuildInstantiatorTypeArguments(intptr_t token_index);
 
   // Perform a type check on the given value.
-  void BuildAssertAssignable(intptr_t node_id,
-                             intptr_t token_index,
+  void BuildAssertAssignable(intptr_t token_index,
                              Value* value,
                              const AbstractType& dst_type,
-                             const String& dst_name,
-                             intptr_t start_index);
+                             const String& dst_name);
 
   // Perform a type check on the given value and return it.
-  Value* BuildAssignableValue(intptr_t node_id,
-                              intptr_t token_index,
+  Value* BuildAssignableValue(AstNode* value_node,
                               Value* value,
                               const AbstractType& dst_type,
-                              const String& dst_name,
-                              intptr_t start_index);
+                              const String& dst_name);
 
   virtual void BuildInstanceOf(ComparisonNode* node);
 
@@ -182,16 +155,16 @@ class EffectGraphVisitor : public AstNodeVisitor {
 
   void CloseFragment() { exit_ = NULL; }
   intptr_t AllocateTempIndex() { return temp_index_++; }
-  void DeallocateTempIndex() { --temp_index_; }
+  void DeallocateTempIndex(intptr_t n) {
+    ASSERT(temp_index_ >= n);
+    temp_index_ -= n;
+  }
 
   virtual void CompiletimeStringInterpolation(const Function& interpol_func,
                                               const Array& literals);
 
-  TempVal* BuildObjectAllocation(ConstructorCallNode* node,
-                                 int start_index);
-  void BuildConstructorCall(ConstructorCallNode* node,
-                            int start_index,
-                            Value* alloc_value);
+  Definition* BuildObjectAllocation(ConstructorCallNode* node);
+  void BuildConstructorCall(ConstructorCallNode* node, Value* alloc_value);
 
   void BuildStoreContext(const LocalVariable& variable);
   void BuildLoadContext(const LocalVariable& variable);
@@ -230,9 +203,6 @@ class ValueGraphVisitor : public EffectGraphVisitor {
   // Visit functions overridden by this class.
   virtual void VisitLiteralNode(LiteralNode* node);
   virtual void VisitAssignableNode(AssignableNode* node);
-  virtual void VisitIncrOpLocalNode(IncrOpLocalNode* node);
-  virtual void VisitIncrOpInstanceFieldNode(IncrOpInstanceFieldNode* node);
-  virtual void VisitIncrOpIndexedNode(IncrOpIndexedNode* node);
   virtual void VisitConstructorCallNode(ConstructorCallNode* node);
   virtual void VisitBinaryOpNode(BinaryOpNode* node);
   virtual void VisitConditionalExprNode(ConditionalExprNode* node);
@@ -247,38 +217,24 @@ class ValueGraphVisitor : public EffectGraphVisitor {
 
  private:
   // Helper to set the output state to return a Value.
-  virtual void ReturnValue(Value* value) { value_ = value; }
+  virtual void ReturnValue(Value* value) {
+    ASSERT(value->IsUse() || value->IsTemp());
+    value_ = value;
+  }
 
   // Specify a computation as the final result.  Adds a Bind instruction to
   // the graph and returns its temporary value (i.e., set the output
   // parameters).
   virtual void ReturnComputation(Computation* computation) {
-    BindInstr* defn = new BindInstr(temp_index(), computation);
+    BindInstr* defn = new BindInstr(computation);
     AddInstruction(defn);
-    AllocateTempIndex();
-    value_ = new UseVal(defn);
+    ReturnValue(new UseVal(defn));
   }
 
   virtual void CompiletimeStringInterpolation(const Function& interpol_func,
                                               const Array& literals);
 
   virtual void BuildInstanceOf(ComparisonNode* node);
-};
-
-
-// Translate an AstNode to a control-flow graph fragment for both its effects
-// and value as an outgoing argument.  Implements a function from an AstNode
-// and next temporary index to a graph fragment (as in the
-// EffectGraphBuilder), an updated temporary index, and an intermediate
-// language Value.
-class ArgumentGraphVisitor : public ValueGraphVisitor {
- public:
-  ArgumentGraphVisitor(FlowGraphBuilder* owner, intptr_t temp_index)
-      : ValueGraphVisitor(owner, temp_index) { }
-
- private:
-  // Override the returning of constants to ensure they are materialized.
-  virtual void ReturnValue(Value* value);
 };
 
 
@@ -297,24 +253,18 @@ class ArgumentGraphVisitor : public ValueGraphVisitor {
 // We expect that AstNode in test contexts either have only nonlocal exits
 // or else control flow has both true and false successors.
 //
-// The node_id and token_index are used in checked mode to verify that the
+// The cis and token_index are used in checked mode to verify that the
 // condition of the test is of type bool.
 class TestGraphVisitor : public ValueGraphVisitor {
  public:
   TestGraphVisitor(FlowGraphBuilder* owner,
                    intptr_t temp_index,
-                   intptr_t condition_node_id,
                    intptr_t condition_token_index)
       : ValueGraphVisitor(owner, temp_index),
         true_successor_address_(NULL),
         false_successor_address_(NULL),
-        condition_node_id_(condition_node_id),
         condition_token_index_(condition_token_index) {
   }
-
-  // Visit functions overridden by this class.
-  virtual void VisitLiteralNode(LiteralNode* node);
-  virtual void VisitLoadLocalNode(LoadLocalNode* node);
 
   TargetEntryInstr** true_successor_address() const {
     ASSERT(true_successor_address_ != NULL);
@@ -325,7 +275,6 @@ class TestGraphVisitor : public ValueGraphVisitor {
     return false_successor_address_;
   }
 
-  intptr_t condition_node_id() const { return condition_node_id_; }
   intptr_t condition_token_index() const { return condition_token_index_; }
 
  private:
@@ -333,19 +282,10 @@ class TestGraphVisitor : public ValueGraphVisitor {
   // Closes the fragment and sets the output parameters.
   virtual void ReturnValue(Value* value);
 
-  // Specify a computation as the final result.  Adds a Bind instruction to
-  // the graph and branches on its value.
-  virtual void ReturnComputation(Computation* computation) {
-    BindInstr* defn = new BindInstr(temp_index(), computation);
-    AddInstruction(defn);
-    ReturnValue(new UseVal(defn));
-  }
-
   // Output parameters.
   TargetEntryInstr** true_successor_address_;
   TargetEntryInstr** false_successor_address_;
 
-  intptr_t condition_node_id_;
   intptr_t condition_token_index_;
 };
 

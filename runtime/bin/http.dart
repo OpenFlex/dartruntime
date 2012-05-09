@@ -60,18 +60,18 @@ interface HttpServer default _HttpServer {
 
   /**
    * Start listening for HTTP requests on the specified [host] and
-   * [port]. For each HTTP request the handler set through [onRequest]
-   * will be invoked. If a [port] of 0 is specified the server will
-   * choose an ephemeral port. The optional argument [backlog] can be
-   * used to specify the listen backlog for the underlying OS listen
-   * setup.
+   * [port]. If a [port] of 0 is specified the server will choose an
+   * ephemeral port. The optional argument [backlog] can be used to
+   * specify the listen backlog for the underlying OS listen
+   * setup. See [addRequestHandler] and [defaultRequestHandler] for
+   * information on how incoming HTTP requests are handled.
    */
   void listen(String host, int port, [int backlog]);
 
   /**
-   * Attach the HTTP server to an existing ServerSocket. If the HttpServer is
-   * closed, the HttpServer will just detach itself, and not close
-   * [serverSocket].
+   * Attach the HTTP server to an existing [:ServerSocket:]. If the
+   * [HttpServer] is closed, the [HttpServer] will just detach itself,
+   * and not close [serverSocket].
    */
   void listenOn(ServerSocket serverSocket);
 
@@ -270,6 +270,13 @@ interface HttpHeaders default _HttpHeaders {
   void removeAll(String name);
 
   /**
+   * Enumerate the headers applying the function [f] to each
+   * header. The header name passed in [name] will be all lower
+   * case.
+   */
+  void forEach(void f(String name, List<String> values));
+
+  /**
    * Gets and sets the date. The value of this property will
    * reflect the "Date" header
    */
@@ -306,6 +313,11 @@ interface HttpRequest default _HttpRequest {
   int get contentLength();
 
   /**
+   * Returns the persistent connection state signaled by the client.
+   */
+  bool get persistentConnection();
+
+  /**
    * Returns the method for the request.
    */
   String get method();
@@ -340,6 +352,12 @@ interface HttpRequest default _HttpRequest {
    * the request data.
    */
   InputStream get inputStream();
+
+  /**
+   * Returns the HTTP protocol version used in the request. This will
+   * be "1.0" or "1.1".
+   */
+  String get protocolVersion();
 }
 
 
@@ -368,6 +386,13 @@ interface HttpResponse default _HttpResponse {
   String reasonPhrase;
 
   /**
+   * Gets and sets the persistent connection state. The initial value
+   * of this property is the persistent connection state from the
+   * request.
+   */
+  bool persistentConnection;
+
+  /**
    * Returns the response headers.
    */
   HttpHeaders get headers();
@@ -388,10 +413,10 @@ interface HttpResponse default _HttpResponse {
    * socket is detached the HTTP server will no longer perform any
    * operations on it.
    *
-   * This is normally used when a HTTP upgraded request is received
+   * This is normally used when a HTTP upgrade request is received
    * and the communication should continue with a different protocol.
    */
-  Socket detachSocket();
+  DetachedSocket detachSocket();
 }
 
 
@@ -485,6 +510,44 @@ interface HttpClientConnection {
    * connecting or processing the HTTP request.
    */
   void set onError(void callback(e));
+
+  /**
+   * Set this property to [:true:] if this connection should
+   * automatically follow redirects. The default is [:true:].
+   */
+  bool followRedirect;
+
+  /**
+   * Set this property to the maximum number of redirects to follow
+   * when [followRedirect] is [:true:]. If this number is exceeded the
+   * [onError] callback will be called with a [RedirectLimitExceeded]
+   * exception. The default value is 5.
+   */
+  int maxRedirects;
+
+  /**
+   * Returns the series of redirects this connection has been through.
+   */
+  List<RedirectInfo> get redirects();
+
+  /**
+   * Redirect this connection to a new URL. The default value for
+   * [method] is the method for the current request. The default value
+   * for [url] is the value of the [:HttpStatus.LOCATION:] header of
+   * the current response. All body data must have been read from the
+   * current response before calling [redirect].
+   */
+  void redirect([String method, Uri url]);
+
+  /**
+   * Detach the underlying socket from the HTTP client. When the
+   * socket is detached the HTTP client will no longer perform any
+   * operations on it.
+   *
+   * This is normally used when a HTTP upgrade is negotiated and the
+   * communication should continue with a different protocol.
+   */
+  DetachedSocket detachSocket();
 }
 
 
@@ -538,6 +601,14 @@ interface HttpClientResponse default _HttpClientResponse {
   int get contentLength();
 
   /**
+   * Returns whether the status code is one of the normal redirect
+   * codes [:HttpStatus.MOVED_PERMANENTLY:], [:HttpStatus.FOUND:],
+   * [:HttpStatus.MOVED_TEMPORARILY:], [:HttpStatus.SEE_OTHER:] and
+   * [:HttpStatus.TEMPORARY_REDIRECT:].
+   */
+  bool get isRedirect();
+
+  /**
    * Returns the response headers.
    */
   HttpHeaders get headers();
@@ -550,8 +621,61 @@ interface HttpClientResponse default _HttpClientResponse {
 }
 
 
+/**
+ * Redirect information.
+ */
+interface RedirectInfo {
+  /**
+   * Returns the status code used for the redirect.
+   */
+  int get statusCode();
+
+  /**
+   * Returns the method used for the redirect.
+   */
+  String get method();
+
+  /**
+   * Returns the location for the redirect.
+   */
+  Uri get location();
+}
+
+
+/**
+ * When detaching a socket from either the [:HttpServer:] or the
+ * [:HttpClient:] due to a HTTP connection upgrade there might be
+ * unparsed data already read from the socket. This unparsed data
+ * together with the detached socket is returned in an instance of
+ * this class.
+ */
+interface DetachedSocket default _DetachedSocket {
+  Socket get socket();
+  List<int> get unparsedData();
+}
+
+
 class HttpException implements Exception {
   const HttpException([String this.message = ""]);
   String toString() => "HttpException: $message";
   final String message;
+}
+
+
+class RedirectException extends HttpException {
+  const RedirectException(String message,
+                          List<RedirectInfo> this.redirects) : super(message);
+  final List<RedirectInfo> redirects;
+}
+
+
+class RedirectLimitExceededException extends RedirectException {
+  const RedirectLimitExceededException(List<RedirectInfo> redirects)
+      : super("Redirect limit exceeded", redirects);
+}
+
+
+class RedirectLoopException extends RedirectException {
+  const RedirectLoopException(List<RedirectInfo> redirects)
+      : super("Redirect loop detected", redirects);
 }

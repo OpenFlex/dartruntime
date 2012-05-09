@@ -166,7 +166,7 @@ class HInstructionStringifier implements HVisitor<String> {
   String temporaryId(HInstruction instruction) {
     String prefix;
     HType type = instruction.propagatedType;
-    if (type.isNonPrimitive()) {
+    if (!type.isPrimitive()) {
       prefix = 'U';
     } else {
       switch (type) {
@@ -232,12 +232,12 @@ class HInstructionStringifier implements HVisitor<String> {
   String visitExit(HExit node) => "exit";
 
   String visitFieldGet(HFieldGet node) {
-    return 'get ${node.element.name.slowToString()}';
+    return 'get ${node.name.slowToString()}';
   }
 
   String visitFieldSet(HFieldSet node) {
     String valueId = temporaryId(node.value);
-    return 'set ${node.element.name.slowToString()} to $valueId';
+    return 'set ${node.name.slowToString()} to $valueId';
   }
 
   String visitGoto(HGoto node) {
@@ -433,7 +433,12 @@ class HInstructionStringifier implements HVisitor<String> {
   }
 
   String visitIs(HIs node) {
-    String type = node.typeName.toString();
+    String type = node.typeExpression.toString();
     return "TypeTest: ${temporaryId(node.expression)} is $type";
+  }
+
+  String visitTypeConversion(HTypeConversion node) {
+    String type = node.propagatedType.toString();
+    return "TypeConversion: ${temporaryId(node.inputs[0])} to $type";
   }
 }
