@@ -9,13 +9,6 @@
 
 
 //------------------------------------------------------------------
-void foo(Dart_NativeArguments args)
-{
-    printf("Hello embedded world\n");
-}
-
-
-//------------------------------------------------------------------
 struct Dart_Scope
 {
     Dart_Scope()  { Dart_EnterScope(); }
