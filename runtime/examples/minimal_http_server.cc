@@ -48,21 +48,12 @@ static Dart_Handle library_handler(Dart_LibraryTag tag,
 }
 
 
-
-//------------------------------------------------------------------
-static Dart_NativeFunction resolveFoo(Dart_Handle name, int arg_count)
-{
-    return &foo;
-}
-
-
 //------------------------------------------------------------------
 int main()
 {
     const char* script =
 
 "#import('dart:io'); \n"
-
 
 "class FileHandler { \n"
 "  FileHandler() { \n"
@@ -151,10 +142,11 @@ int main()
     Dart_Scope isolate_scope;
 
     // Load
-    Dart_Handle url = Dart_NewString("mhs");
+    Dart_Handle url = Dart_NewString("minimal_http_server");
     Dart_Handle source = Dart_NewString(script);
     Dart_Handle import_map = Dart_NewList(0);
-    Dart_Handle lib = Dart_LoadScript(url, source, library_handler, import_map);
+    Dart_SetLibraryTagHandler(library_handler);
+    Dart_Handle lib = Dart_LoadScript(url, source, import_map);
     if (!checkResult(lib)) {
         return 30;
     }

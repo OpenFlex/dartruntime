@@ -87,7 +87,8 @@ int main()
     Dart_Handle url = Dart_NewString("dart:test");
     Dart_Handle source = Dart_NewString(script);
     Dart_Handle import_map = Dart_NewList(0);
-    Dart_Handle lib = Dart_LoadScript(url, source, library_handler, import_map);
+    Dart_SetLibraryTagHandler(library_handler);
+    Dart_Handle lib = Dart_LoadScript(url, source, import_map);
     if (!checkResult(lib)) {
         return 30;
     }
