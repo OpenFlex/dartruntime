@@ -232,17 +232,19 @@ endif()
 if(bind)
     enable_testing()
 
-    macro(p_addExecutables _dir)
+    macro(p_addExecutables _dir _prefix)
         foreach(_it ${ARGN})
-            t_init(${_dir}_${_it})
-            t_addSources(${_dir}/${_dir}_${_it}.cc)
+            t_init(${_prefix}${_it})
+            t_addSources(${_dir}/${_prefix}${_it}.cc)
             t_linkLibraries(dart_corelib)
             t_includeDirectories(include)
             t_includeDirectories(.) # needed because dart_api.h isn't complete
             t_makeTest()
         endforeach()
     endmacro()
+	
 
-    p_addExecutables(bind NativeFunction_foo NativeFunction_userdata NativeFunction_nativefield NativeFunction_class)
+    p_addExecutables(bind bind_ NativeFunction_foo NativeFunction_userdata NativeFunction_nativefield NativeFunction_class)
+	p_addExecutables(examples "" minimal_http_server)
 endif()
 
