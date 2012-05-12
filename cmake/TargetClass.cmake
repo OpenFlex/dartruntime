@@ -199,7 +199,7 @@ macro(createStringLiteralHelper _var _in _out _inc _varname)
                 --include ${_inc}
                 --var_name ${_varname}
                 ${_dart_files}
-        DEPENDS ${_in} COMMENT "Generating ${_out}")
+        DEPENDS ${_in} ${_dart_files} COMMENT "Generating ${_out}")
     if(verbose)
         message(STATUS "Adding rule for ${_out}")
         foreach(_it ${_dart_files})
@@ -214,6 +214,31 @@ macro(t_embedDartFiles _in _out _inc _varname)
     createStringLiteralHelper(_gen ${t_top}/${_in} ${_out} ${_inc} ${_varname} ${t_dart_sources})
     list(APPEND t_sources ${_gen})
     set(t_dart_sources)
+endmacro()
+
+
+macro(t_concatLibrary _out)
+    set(_dart_files ${ARGN})
+    add_custom_command(
+        OUTPUT ${_out}
+        COMMAND ${PYTHON_EXECUTABLE}
+        ARGS ${t_top}/tools/concat_library.py
+                ${_dart_files}
+                --output ${_out}
+        DEPENDS ${_dart_files} COMMENT "Generating ${_out}")
+    set_source_files_properties(${_out} PROPERTIES GENERATED TRUE)
+    if(verbose)
+        message(STATUS "Adding rule for ${_out}")
+        foreach(_it ${_dart_files})
+            message(STATUS "Concatenating library: ${_it}")
+        endforeach()
+    endif()
+endmacro()
+
+
+
+macro(t_setDartFiles)
+    set(t_dart_sources ${ARGN})
 endmacro()
 
 

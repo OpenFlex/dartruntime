@@ -95,7 +95,9 @@ t_removeForeignOsSources()
 embed_builtin_dart(builtin bin/builtin.dart)
 embed_builtin_dart(json ../lib/json/json.dart)
 embed_builtin_dart(utf ../lib/utf/utf_vm.dart ../lib/utf/utf_core.dart ../lib/utf/utf8.dart ../lib/utf/utf16.dart ../lib/utf/utf32.dart)
-embed_builtin_dart(uri  ../lib/uri/uri.dart)
+t_concatLibrary(${gen_dir}/uri.dart ${t_top}/../lib/uri/uri.dart ${t_top}/../lib/uri/helpers.dart)
+t_setDartFiles(${gen_dir}/uri.dart)
+embed_builtin_dart(uri)
 t_findDartFiles(bin)
 t_removeDartFiles(bin/builtin.dart)
 t_prependDartFiles(bin/io.dart) # load first
@@ -242,9 +244,9 @@ if(bind)
             t_makeTest()
         endforeach()
     endmacro()
-	
+
 
     p_addExecutables(bind bind_ NativeFunction_foo NativeFunction_userdata NativeFunction_nativefield NativeFunction_class)
-	p_addExecutables(examples "" minimal_http_server)
+    p_addExecutables(examples "" minimal_http_server)
 endif()
 
